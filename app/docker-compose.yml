@@ -1,0 +1,19 @@
+# Docker Model Runner + Compose "models" (Compose v2.38+).
+# https://docs.docker.com/ai/compose/models-and-compose/
+#
+# This replaces manual host.docker.internal:12434 — Compose injects OPENAI_BASE_URL and MODEL_NAME.
+# Optional: add `env_file: backend.env` for extra vars (copy from backend.env.example).
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    models:
+      llm:
+        endpoint_var: OPENAI_BASE_URL
+        model_var: MODEL_NAME
+
+models:
+  llm:
+    model: ai/gemma4:latest

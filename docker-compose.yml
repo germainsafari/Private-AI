@@ -1,0 +1,16 @@
+# Run from "Private AI" folder: docker compose up --build
+# Or use app/docker-compose.yml after: cd app
+
+services:
+  app:
+    build: ./app
+    ports:
+      - "8000:8000"
+    models:
+      llm:
+        endpoint_var: OPENAI_BASE_URL
+        model_var: MODEL_NAME
+
+models:
+  llm:
+    model: ai/gemma4:latest

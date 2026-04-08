@@ -1,0 +1,22 @@
+# Render Blueprint: https://render.com/docs/yaml-spec
+# After push, use Dashboard → New → Blueprint → connect repo, or `render.yaml` auto-detected.
+#
+# You MUST set API_KEY (and usually OPENAI_BASE_URL / MODEL_NAME) in the Render dashboard:
+# Dashboard → your Web Service → Environment.
+
+services:
+  - type: web
+    name: polski-app
+    runtime: docker
+    dockerfilePath: ./app/Dockerfile
+    dockerContext: ./app
+    healthCheckPath: /api/health
+    envVars:
+      # OpenAI-compatible API reachable from the internet (NOT Docker Model Runner on your PC).
+      - key: OPENAI_BASE_URL
+        value: https://api.openai.com/v1
+      - key: MODEL_NAME
+        value: gpt-4o-mini
+      # Create in Dashboard → Environment (secret). Required for OpenAI and most hosts.
+      - key: API_KEY
+        sync: false

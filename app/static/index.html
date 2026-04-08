@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Polski — practice</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/css/style.css" />
+  </head>
+  <body>
+    <div id="app" class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-text">Polski</span>
+        </div>
+        <div class="streak" id="streakBadge" title="Day streak">
+          <span class="streak-flame" aria-hidden="true">🔥</span>
+          <span id="streakCount">0</span>
+          <span class="streak-label">day streak</span>
+        </div>
+      </header>
+
+      <main class="main">
+        <!-- Dashboard -->
+        <section id="viewDashboard" class="view view--active">
+          <div class="hero">
+            <h1>Learn Polish, one story at a time</h1>
+            <p class="hero-sub">
+              Short AI-built passages with drag-and-drop words — like your favourite
+              language app, tuned for Polish.
+            </p>
+          </div>
+          <div class="lesson-grid" id="lessonGrid"></div>
+        </section>
+
+        <!-- Lesson -->
+        <section id="viewLesson" class="view" hidden>
+          <button type="button" class="back-link" id="btnBack">← Dashboard</button>
+          <div class="lesson-card">
+            <p class="lesson-topic" id="lessonTopicLabel"></p>
+            <h2 class="lesson-title" id="lessonTitle"></h2>
+            <p class="lesson-hint" id="lessonHint"></p>
+            <div class="passage" id="passage"></div>
+            <p class="bank-label">Word bank</p>
+            <div class="word-bank" id="wordBank"></div>
+            <div class="lesson-actions">
+              <button type="button" class="btn btn--ghost" id="btnReset">Reset</button>
+              <button type="button" class="btn btn--primary" id="btnCheck">Check</button>
+            </div>
+            <p class="feedback" id="feedback" role="status"></p>
+          </div>
+        </section>
+
+        <!-- Success -->
+        <section id="viewDone" class="view" hidden>
+          <div class="done-panel">
+            <div class="done-icon" aria-hidden="true">✓</div>
+            <h2>Świetnie!</h2>
+            <p id="doneMessage">You nailed that sentence.</p>
+            <button type="button" class="btn btn--primary" id="btnToDashboard">
+              Back to lessons
+            </button>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <span>Runs on your machine with Docker Model Runner · Model <code id="modelHint">ai/gemma4</code></span>
+      </footer>
+    </div>
+    <script src="/assets/js/app.js" type="module"></script>
+  </body>
+</html>
