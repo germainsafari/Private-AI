@@ -1,92 +1,96 @@
-# Polski — Polish practice with Docker Model Runner
+# Admind Chat — Private ChatGPT for your local GPU model
 
-A small web app that generates Polish reading exercises (short passages with drag-and-drop words), checks your answers, and tracks a simple **day streak** in the browser. The backend uses the **OpenAI-compatible API** exposed by [Docker Model Runner](https://docs.docker.com/ai/model-runner/) (DMR), e.g. the **`ai/gemma4:latest`** model.
+A modern, ChatGPT/Claude-style chat interface that talks to **any OpenAI-compatible API**, including your own self-hosted **vLLM / Ollama / LM Studio / Docker Model Runner** model. Built to work with a private GPU model over Tailscale — nothing leaves your network.
 
-## Prerequisites
+## Features
 
-- **Docker Desktop** with [Model Runner](https://docs.docker.com/ai/model-runner/) enabled  
-- For **Docker Compose** with the `models:` block: **Compose v2.38+** (see [AI models in Compose](https://docs.docker.com/ai/compose/models-and-compose/))  
-- For **local Python** runs: host access to DMR on **TCP port 12434** (enable in Docker Desktop AI / Model Runner settings, or use the [Desktop CLI](https://docs.docker.com/desktop/features/desktop-cli/) as documented by Docker)
+- Clean dark ChatGPT-style UI with streaming (SSE) responses
+- Markdown rendering, syntax-highlighted code blocks, and "copy" buttons
+- Multiple conversations persisted to `localStorage`
+- New chat, delete chat, clear conversation, stop generation
+- Auto-sizing composer, Enter to send, Shift+Enter for newline
+- Works with any OpenAI-compatible endpoint (vLLM, Ollama, DMR, OpenAI, Groq, Together, …)
 
-## Run with Docker Compose (recommended)
-
-**Option A — project root** (`Private AI`, where this README is):
-
-```bash
-docker compose up --build
-```
-
-**Option B — `app` folder** (where `Dockerfile` lives):
+## Quick start (local Python)
 
 ```bash
 cd app
-docker compose up --build
-```
-
-If you see `no configuration file provided`, you are in a folder without `docker-compose.yml`; use **Option A** from the repo root or **Option B** after `cd app`.
-
-Open [http://localhost:8000](http://localhost:8000). Compose binds the **`llm`** model and injects **`OPENAI_BASE_URL`** and **`MODEL_NAME`** into the `app` service — you do not need to set `host.docker.internal` manually.
-
-To change the model image, edit `models.llm.model` in `app/docker-compose.yml` (for example another tag of Gemma or a different DMR-supported model).
-
-## Run locally with Python
-
-Useful while editing the API or static files:
-
-```bash
-cd app
-# Copy .env.example to .env (e.g. copy .env.example .env on Windows, or cp on Unix)
 pip install -r requirements.txt
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
+# create .env (see Environment variables below)
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Point **`.env`** at your local DMR OpenAI base URL. The defaults in **`.env.example`** assume **`http://localhost:12434/engines/gemma4.cpp/v1`** and **`MODEL_NAME=ai/gemma4:latest`**. Adjust the path if your DMR setup uses a different engine segment (see [DMR REST API](https://docs.docker.com/ai/model-runner/api-reference/)).
+Then open [http://localhost:8000](http://localhost:8000).
+
+### Example `.env` for a local vLLM GPU server over Tailscale
+
+```env
+OPENAI_BASE_URL=http://100.77.181.118:8080/v1
+MODEL_NAME=Qwen/Qwen2.5-VL-32B-Instruct-AWQ
+API_KEY=not-needed
+```
+
+### Example `.env` for Ollama
+
+```env
+OPENAI_BASE_URL=http://localhost:11434/v1
+MODEL_NAME=llama3.1
+API_KEY=ollama
+```
+
+### Example `.env` for OpenAI
+
+```env
+OPENAI_BASE_URL=https://api.openai.com/v1
+MODEL_NAME=gpt-4o-mini
+API_KEY=sk-...
+```
 
 ## Environment variables
 
 | Variable | Purpose |
-|----------|---------|
-| `OPENAI_BASE_URL` | OpenAI SDK base URL (DMR: typically ends with `/engines/.../v1`). Injected by Compose when using `models:` |
-| `MODEL_NAME` | Model id (e.g. `ai/gemma4:latest`). Injected by Compose when using `models:` |
-| `BASE_URL` | Legacy alias for `OPENAI_BASE_URL` |
-| `LLM_URL` / `LLM_MODEL` | Fallback names if you use Compose **short** model syntax |
-| `API_KEY` | Optional. DMR ignores auth; the app substitutes a placeholder if this is empty so the OpenAI client does not error |
+|---|---|
+| `OPENAI_BASE_URL` | OpenAI-compatible base URL (must end in `/v1`). Aliases: `BASE_URL`, `LLM_URL` |
+| `MODEL_NAME` | Model id exactly as registered by your server. Aliases: `MODEL`, `LLM_MODEL` |
+| `API_KEY` | API key. Use any non-empty placeholder for servers that ignore auth |
+| `SYSTEM_PROMPT` | Optional. Overrides the default system prompt |
 
-Optional **`backend.env`**: copy `app/backend.env.example` to `backend.env` and add `env_file: - backend.env` under the `app` service if you want extra variables without changing Compose.
+## API
+
+- `POST /api/chat` — streaming (SSE) or non-streaming chat completion
+  - Body: `{ "messages": [{"role":"user","content":"..."}], "stream": true, "temperature": 0.7, "max_tokens": 1024, "system": "optional override" }`
+- `GET /api/models` — list models reported by the backend
+- `GET /api/health` — `{ status, model, endpoint }`
+
+## Run with Docker Compose
+
+```bash
+docker compose up --build
+```
+
+Edit `app/docker-compose.yml` to point at your backend.
 
 ## Project layout
 
 ```text
 app/
-  main.py           # FastAPI API + static app shell
-  static/           # HTML, CSS, JS
+  main.py            # FastAPI: streaming chat + static shell
+  static/
+    index.html
+    css/style.css
+    js/app.js
   Dockerfile
   docker-compose.yml
   requirements.txt
   .env.example
 ```
 
-## Deploy on [Render](https://render.com)
-
-**Important:** [Docker Model Runner](https://docs.docker.com/ai/model-runner/) runs on **your machine** (or a server you control). **Render cannot reach `localhost:12434` or your Docker Desktop model.** On Render you must point the app at a **public OpenAI-compatible HTTPS API** (for example [OpenAI](https://platform.openai.com/), [Groq](https://console.groq.com/), [Together](https://www.together.ai/), or any self-hosted API you expose with TLS).
-
-1. Push this repo to GitHub/GitLab/Bitbucket.
-2. In Render: **New** → **Blueprint** (or **Web Service** with **Docker**).
-3. Connect the repo. If you use the included `render.yaml`, Render picks `app/Dockerfile` and `dockerContext: app`.
-4. In **Environment**, set:
-   - **`API_KEY`** — your provider’s secret key (mark secret).
-   - **`OPENAI_BASE_URL`** — e.g. `https://api.openai.com/v1` (OpenAI), or your provider’s base URL.
-   - **`MODEL_NAME`** — e.g. `gpt-4o-mini` (must exist on that API).
-5. Deploy. The Dockerfile listens on **`PORT`** (Render sets this automatically).
-
-Defaults in `render.yaml` assume OpenAI + `gpt-4o-mini`; change `OPENAI_BASE_URL` / `MODEL_NAME` for other hosts. The app’s health check is **`GET /api/health`**.
-
 ## Troubleshooting
 
-- **Lessons show “offline” or errors**: Confirm DMR is running and reachable — from the host, `GET` [http://localhost:12434/engines/v1/models](http://localhost:12434/engines/v1/models) should respond when TCP access is enabled.  
-- **Compose errors on `models:`**: Upgrade Docker Desktop / Compose to a version that supports the [Compose `models` key](https://docs.docker.com/reference/compose-file/models/).  
-- **Wrong engine path**: If chat calls fail, try the generic base `.../engines/v1` instead of `.../engines/gemma4.cpp/v1` in `.env` (local run only).
+- **UI says `offline`**: The backend can't reach `OPENAI_BASE_URL`. Test with `curl $OPENAI_BASE_URL/models`.
+- **502 Model error**: Your model id in `MODEL_NAME` must match what your server reports. Check `GET $OPENAI_BASE_URL/models`.
+- **Empty responses**: Some self-hosted models need a lower `temperature` or different stop tokens. Try `temperature: 0.3`.
 
 ## License
 
-Use and modify for your own learning and deployment as you see fit.
+Use and modify as you see fit.

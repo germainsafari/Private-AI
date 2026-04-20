@@ -1,381 +1,476 @@
-const STREAK_KEY = "polish_practice_streak_v1";
+(() => {
+  "use strict";
 
-const LESSONS = [
-  {
-    topic: "Greetings",
-    desc: "hellos, goodbyes, polite phrases",
-  },
-  {
-    topic: "Food & drink",
-    desc: "ordering, tastes, in a café",
-  },
-  {
-    topic: "Travel",
-    desc: "trains, tickets, directions",
-  },
-  {
-    topic: "Family",
-    desc: "relatives and simple descriptions",
-  },
-  {
-    topic: "Numbers & time",
-    desc: "counting, days, clock times",
-  },
-  {
-    topic: "Common verbs",
-    desc: "everyday actions in present tense",
-  },
-];
+  const STORAGE_KEY = "admind.chats.v1";
+  const ACTIVE_KEY = "admind.active.v1";
 
-const els = {
-  viewDashboard: document.getElementById("viewDashboard"),
-  viewLesson: document.getElementById("viewLesson"),
-  viewDone: document.getElementById("viewDone"),
-  lessonGrid: document.getElementById("lessonGrid"),
-  lessonTopicLabel: document.getElementById("lessonTopicLabel"),
-  lessonTitle: document.getElementById("lessonTitle"),
-  lessonHint: document.getElementById("lessonHint"),
-  passage: document.getElementById("passage"),
-  wordBank: document.getElementById("wordBank"),
-  feedback: document.getElementById("feedback"),
-  streakCount: document.getElementById("streakCount"),
-  btnBack: document.getElementById("btnBack"),
-  btnReset: document.getElementById("btnReset"),
-  btnCheck: document.getElementById("btnCheck"),
-  btnToDashboard: document.getElementById("btnToDashboard"),
-  doneMessage: document.getElementById("doneMessage"),
-  modelHint: document.getElementById("modelHint"),
-};
-
-let state = {
-  topic: "",
-  lessonId: null,
-  fragments: [],
-  wordBank: [],
-  /** blank id -> word or null */
-  slots: {},
-  dragPayload: null,
-};
-
-function showView(name) {
-  els.viewDashboard.hidden = name !== "dashboard";
-  els.viewLesson.hidden = name !== "lesson";
-  els.viewDone.hidden = name !== "done";
-}
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function yesterdayISO() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
-function loadStreak() {
-  try {
-    return JSON.parse(localStorage.getItem(STREAK_KEY) || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function saveStreak(data) {
-  localStorage.setItem(STREAK_KEY, JSON.stringify(data));
-}
-
-function refreshStreakDisplay() {
-  const { streak = 0 } = loadStreak();
-  els.streakCount.textContent = String(streak);
-}
-
-/** Call after a correct answer; updates streak by calendar days. */
-function bumpStreakOnSuccess() {
-  const today = todayISO();
-  let { lastSuccessDay, streak = 0 } = loadStreak();
-  if (lastSuccessDay === today) {
-    refreshStreakDisplay();
-    return streak;
-  }
-  const y = yesterdayISO();
-  if (lastSuccessDay === y) streak += 1;
-  else streak = 1;
-  saveStreak({ lastSuccessDay: today, streak });
-  refreshStreakDisplay();
-  return streak;
-}
-
-function renderDashboard() {
-  els.lessonGrid.innerHTML = "";
-  LESSONS.forEach((L) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "lesson-tile";
-    btn.innerHTML = `
-      <div class="tile-kicker">Lesson</div>
-      <div class="tile-title">${escapeHtml(L.topic)}</div>
-      <p class="tile-desc">${escapeHtml(L.desc)}</p>
-    `;
-    btn.addEventListener("click", () => startLesson(L.topic));
-    els.lessonGrid.appendChild(btn);
-  });
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-async function startLesson(topic) {
-  state.topic = topic;
-  els.feedback.textContent = "";
-  els.feedback.className = "feedback";
-  showView("lesson");
-  els.lessonTopicLabel.textContent = topic;
-  els.lessonTitle.textContent = "Loading…";
-  els.lessonHint.textContent = "";
-  els.passage.innerHTML = "";
-  els.wordBank.innerHTML = "";
-
-  try {
-    const res = await fetch("/api/lesson", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic }),
-    });
-    if (!res.ok) throw new Error("Lesson request failed");
-    const data = await res.json();
-    state.lessonId = data.lesson_id;
-    state.fragments = data.fragments || [];
-    state.wordBank = [...(data.word_bank || [])];
-    state.slots = {};
-    els.lessonTitle.textContent = data.title || topic;
-    els.lessonHint.textContent = data.context_en || "";
-    renderLesson();
-  } catch (e) {
-    els.lessonTitle.textContent = "Could not load lesson";
-    els.lessonHint.textContent =
-      "Is Docker Model Runner running on port 12434? Check the terminal or run offline fallback by restarting the app.";
-    console.error(e);
-  }
-}
-
-function blankIds() {
-  const ids = [];
-  state.fragments.forEach((f) => {
-    if (f.type === "blank") ids.push(f.id);
-  });
-  return ids.sort((a, b) => a - b);
-}
-
-function renderLesson() {
-  els.passage.innerHTML = "";
-  state.fragments.forEach((f) => {
-    if (f.type === "text") {
-      const span = document.createElement("span");
-      span.className = "txt";
-      span.textContent = f.value || "";
-      els.passage.appendChild(span);
-    } else if (f.type === "blank") {
-      const id = f.id;
-      const slot = document.createElement("span");
-      slot.className = "slot";
-      slot.dataset.blankId = String(id);
-      slot.addEventListener("dragover", onDragOver);
-      slot.addEventListener("dragleave", onDragLeave);
-      slot.addEventListener("drop", onDropOnSlot);
-      slot.addEventListener("click", () => onSlotTap(id));
-      const placed = state.slots[id];
-      if (placed) {
-        slot.appendChild(makeChip(placed, { inSlot: true, blankId: id }));
-        slot.classList.add("slot--good");
-      }
-      els.passage.appendChild(slot);
-    }
-  });
-  renderBank();
-}
-
-function makeChip(text, opts = {}) {
-  const chip = document.createElement("span");
-  chip.className = "chip" + (opts.inSlot ? " chip--in-slot" : "");
-  chip.textContent = text;
-  chip.draggable = true;
-  chip.dataset.word = text;
-  if (opts.blankId != null) chip.dataset.fromBlank = String(opts.blankId);
-  chip.addEventListener("dragstart", (ev) => onDragStartChip(ev, text, opts));
-  chip.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    if (opts.inSlot && opts.blankId != null) {
-      returnWordToBank(opts.blankId, text);
-    }
-  });
-  return chip;
-}
-
-function renderBank() {
-  els.wordBank.innerHTML = "";
-  state.wordBank.forEach((w) => {
-    const chip = makeChip(w, { inSlot: false });
-    els.wordBank.appendChild(chip);
-  });
-}
-
-function onDragStartChip(ev, word, opts) {
-  state.dragPayload = {
-    word,
-    from: opts.inSlot ? "slot" : "bank",
-    blankId: opts.blankId,
+  const $ = (sel) => document.querySelector(sel);
+  const els = {
+    app: document.querySelector(".app"),
+    sidebar: $("#sidebar"),
+    chatList: $("#chatList"),
+    newChatBtn: $("#newChatBtn"),
+    collapseBtn: $("#collapseBtn"),
+    openSidebarBtn: $("#openSidebarBtn"),
+    clearBtn: $("#clearBtn"),
+    modelName: $("#modelName"),
+    modelPill: $("#modelPill"),
+    chat: $("#chat"),
+    messages: $("#messages"),
+    welcome: $("#welcome"),
+    composer: $("#composer"),
+    input: $("#input"),
+    sendBtn: $("#sendBtn"),
+    stopBtn: $("#stopBtn"),
   };
-  ev.dataTransfer.effectAllowed = "move";
-  try {
-    ev.dataTransfer.setData("text/plain", word);
-  } catch {
-    /* ignore */
-  }
-}
 
-function onDragOver(ev) {
-  ev.preventDefault();
-  ev.currentTarget.classList.add("slot--hover");
-}
+  // ---------- State ----------
+  /** @type {{id:string,title:string,messages:{role:string,content:string}[],createdAt:number,updatedAt:number}[]} */
+  let chats = [];
+  let activeId = null;
+  let abortController = null;
+  let isStreaming = false;
 
-function onDragLeave(ev) {
-  ev.currentTarget.classList.remove("slot--hover");
-}
+  // ---------- Utils ----------
+  const uid = () =>
+    Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-function onDropOnSlot(ev) {
-  ev.preventDefault();
-  const slot = ev.currentTarget;
-  slot.classList.remove("slot--hover");
-  const blankId = Number(slot.dataset.blankId);
-  const payload = state.dragPayload;
-  if (!payload || !Number.isFinite(blankId)) return;
-
-  if (payload.from === "bank") {
-    takeFromBank(payload.word);
-    const prev = state.slots[blankId];
-    if (prev) pushBank(prev);
-    state.slots[blankId] = payload.word;
-  } else if (payload.from === "slot" && payload.blankId !== blankId) {
-    const a = state.slots[payload.blankId];
-    const b = state.slots[blankId];
-    state.slots[payload.blankId] = b || null;
-    state.slots[blankId] = a || null;
-    cleanupSlots();
-  }
-  state.dragPayload = null;
-  renderLesson();
-}
-
-function takeFromBank(word) {
-  const i = state.wordBank.indexOf(word);
-  if (i >= 0) state.wordBank.splice(i, 1);
-}
-
-function pushBank(word) {
-  state.wordBank.push(word);
-}
-
-function returnWordToBank(blankId, word) {
-  delete state.slots[blankId];
-  state.wordBank.push(word);
-  renderLesson();
-}
-
-function cleanupSlots() {
-  blankIds().forEach((id) => {
-    if (state.slots[id] == null) delete state.slots[id];
-  });
-}
-
-/** Mobile: tap chip then tap slot — use last touched bank word */
-let pendingBankWord = null;
-
-function onSlotTap(blankId) {
-  if (pendingBankWord) {
-    const prev = state.slots[blankId];
-    if (prev) pushBank(prev);
-    takeFromBank(pendingBankWord);
-    state.slots[blankId] = pendingBankWord;
-    pendingBankWord = null;
-    renderLesson();
-    return;
-  }
-}
-
-document.addEventListener("click", (e) => {
-  const t = e.target;
-  if (t.classList && t.classList.contains("chip") && !t.dataset.fromBlank) {
-    pendingBankWord = t.dataset.word;
-    window.setTimeout(() => {
-      if (pendingBankWord === t.dataset.word) pendingBankWord = null;
-    }, 3500);
-  }
-});
-
-async function checkLesson() {
-  els.feedback.textContent = "";
-  els.feedback.className = "feedback";
-  const ids = blankIds();
-  const words = ids.map((id) => state.slots[id]).filter(Boolean);
-  if (words.length !== ids.length) {
-    els.feedback.textContent = "Fill every blank before checking.";
-    els.feedback.classList.add("feedback--err");
-    return;
-  }
-  try {
-    const res = await fetch("/api/check", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lesson_id: state.lessonId, words }),
-    });
-    if (!res.ok) throw new Error("check failed");
-    const data = await res.json();
-    if (data.correct) {
-      const streak = bumpStreakOnSuccess();
-      els.feedback.textContent = "Correct!";
-      els.feedback.classList.add("feedback--ok");
-      document.querySelectorAll(".slot").forEach((s) => s.classList.add("slot--good"));
-      window.setTimeout(() => {
-        els.doneMessage.textContent = `Your streak: ${streak} day${streak === 1 ? "" : "s"}. Pick another lesson when you’re ready.`;
-        showView("done");
-      }, 650);
-    } else {
-      els.feedback.textContent = "Not quite — try rearranging the words.";
-      els.feedback.classList.add("feedback--err");
-      document.querySelectorAll(".slot").forEach((s) => s.classList.add("slot--bad"));
-      window.setTimeout(() => {
-        document.querySelectorAll(".slot").forEach((s) => s.classList.remove("slot--bad"));
-      }, 900);
+  const save = () => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
+      if (activeId) localStorage.setItem(ACTIVE_KEY, activeId);
+    } catch (e) {
+      console.warn("localStorage save failed", e);
     }
-  } catch (e) {
-    console.error(e);
-    els.feedback.textContent = "Could not verify. Try again.";
-    els.feedback.classList.add("feedback--err");
+  };
+
+  const load = () => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) chats = JSON.parse(raw) || [];
+      activeId = localStorage.getItem(ACTIVE_KEY) || null;
+    } catch (e) {
+      chats = [];
+      activeId = null;
+    }
+  };
+
+  const getChat = (id) => chats.find((c) => c.id === id) || null;
+  const activeChat = () => getChat(activeId);
+
+  const titleFromMessage = (text) => {
+    const t = (text || "").trim().replace(/\s+/g, " ");
+    if (!t) return "New chat";
+    return t.length > 40 ? t.slice(0, 40) + "…" : t;
+  };
+
+  const escapeHtml = (s) =>
+    s
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+
+  const renderMarkdown = (text) => {
+    if (typeof window.marked === "undefined") return escapeHtml(text);
+    try {
+      window.marked.setOptions({
+        breaks: true,
+        gfm: true,
+        headerIds: false,
+        mangle: false,
+      });
+      const raw = window.marked.parse(text || "");
+      if (typeof window.DOMPurify !== "undefined") {
+        return window.DOMPurify.sanitize(raw);
+      }
+      return raw;
+    } catch (e) {
+      return escapeHtml(text);
+    }
+  };
+
+  const enhanceCodeBlocks = (container) => {
+    container.querySelectorAll("pre").forEach((pre) => {
+      if (pre.dataset.enhanced) return;
+      pre.dataset.enhanced = "1";
+      const codeEl = pre.querySelector("code");
+      let lang = "";
+      if (codeEl) {
+        const cls = codeEl.className || "";
+        const m = cls.match(/language-([\w-]+)/);
+        if (m) lang = m[1];
+      }
+      const header = document.createElement("div");
+      header.className = "code-header";
+      const label = document.createElement("span");
+      label.textContent = lang || "code";
+      const btn = document.createElement("button");
+      btn.className = "copy-btn";
+      btn.textContent = "Copy";
+      btn.type = "button";
+      btn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(codeEl ? codeEl.textContent : "");
+          btn.textContent = "Copied";
+          setTimeout(() => (btn.textContent = "Copy"), 1500);
+        } catch {
+          btn.textContent = "Failed";
+          setTimeout(() => (btn.textContent = "Copy"), 1500);
+        }
+      });
+      header.appendChild(label);
+      header.appendChild(btn);
+      pre.insertBefore(header, pre.firstChild);
+    });
+  };
+
+  // ---------- Chat CRUD ----------
+  const createChat = () => {
+    const c = {
+      id: uid(),
+      title: "New chat",
+      messages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    chats.unshift(c);
+    activeId = c.id;
+    save();
+    renderSidebar();
+    renderMessages();
+    return c;
+  };
+
+  const deleteChat = (id) => {
+    chats = chats.filter((c) => c.id !== id);
+    if (activeId === id) activeId = chats[0]?.id || null;
+    if (!activeId) createChat();
+    save();
+    renderSidebar();
+    renderMessages();
+  };
+
+  const selectChat = (id) => {
+    if (activeId === id) return;
+    activeId = id;
+    save();
+    renderSidebar();
+    renderMessages();
+  };
+
+  const clearActive = () => {
+    const c = activeChat();
+    if (!c) return;
+    c.messages = [];
+    c.title = "New chat";
+    c.updatedAt = Date.now();
+    save();
+    renderSidebar();
+    renderMessages();
+  };
+
+  // ---------- Rendering ----------
+  const renderSidebar = () => {
+    els.chatList.innerHTML = "";
+    chats.forEach((c) => {
+      const item = document.createElement("div");
+      item.className = "chat-item" + (c.id === activeId ? " active" : "");
+      item.dataset.id = c.id;
+
+      const title = document.createElement("div");
+      title.className = "title";
+      title.textContent = c.title || "New chat";
+
+      const del = document.createElement("button");
+      del.className = "del";
+      del.type = "button";
+      del.title = "Delete chat";
+      del.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/></svg>';
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (confirm("Delete this chat?")) deleteChat(c.id);
+      });
+
+      item.appendChild(title);
+      item.appendChild(del);
+      item.addEventListener("click", () => selectChat(c.id));
+      els.chatList.appendChild(item);
+    });
+  };
+
+  const renderMessages = () => {
+    const c = activeChat();
+    els.messages.innerHTML = "";
+    if (!c || c.messages.length === 0) {
+      els.welcome.classList.remove("hidden");
+      return;
+    }
+    els.welcome.classList.add("hidden");
+    c.messages.forEach((m) => appendMessageDom(m.role, m.content));
+    scrollToBottom(true);
+  };
+
+  const appendMessageDom = (role, content) => {
+    const wrap = document.createElement("div");
+    wrap.className = "msg " + role;
+
+    const inner = document.createElement("div");
+    inner.className = "inner";
+
+    if (role === "assistant") {
+      const av = document.createElement("div");
+      av.className = "avatar bot";
+      av.textContent = "⚡";
+      inner.appendChild(av);
+      const contentEl = document.createElement("div");
+      contentEl.className = "content";
+      contentEl.innerHTML = renderMarkdown(content);
+      enhanceCodeBlocks(contentEl);
+      inner.appendChild(contentEl);
+    } else {
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = content;
+      inner.appendChild(bubble);
+      const av = document.createElement("div");
+      av.className = "avatar user";
+      av.textContent = "You";
+      av.style.fontSize = "11px";
+      inner.appendChild(av);
+    }
+
+    wrap.appendChild(inner);
+    els.messages.appendChild(wrap);
+    return wrap;
+  };
+
+  const scrollToBottom = (force = false) => {
+    const el = els.chat;
+    const nearBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (force || nearBottom) {
+      el.scrollTop = el.scrollHeight;
+    }
+  };
+
+  // ---------- Streaming chat ----------
+  const setStreaming = (on) => {
+    isStreaming = on;
+    els.sendBtn.disabled = on;
+    els.stopBtn.classList.toggle("hidden", !on);
+    if (on) {
+      els.input.setAttribute("disabled", "true");
+    } else {
+      els.input.removeAttribute("disabled");
+      els.input.focus();
+    }
+  };
+
+  const sendMessage = async (text) => {
+    const content = (text || "").trim();
+    if (!content || isStreaming) return;
+
+    let c = activeChat();
+    if (!c) c = createChat();
+
+    c.messages.push({ role: "user", content });
+    if (!c.title || c.title === "New chat") {
+      c.title = titleFromMessage(content);
+    }
+    c.updatedAt = Date.now();
+    save();
+    renderSidebar();
+
+    els.welcome.classList.add("hidden");
+    appendMessageDom("user", content);
+    scrollToBottom(true);
+
+    const assistantWrap = appendMessageDom("assistant", "");
+    const contentEl = assistantWrap.querySelector(".content");
+    contentEl.classList.add("typing");
+    scrollToBottom(true);
+
+    setStreaming(true);
+    abortController = new AbortController();
+    let accumulated = "";
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: c.messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+          stream: true,
+        }),
+        signal: abortController.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        const msg = "Request failed: " + res.status + " " + res.statusText;
+        contentEl.classList.remove("typing");
+        contentEl.innerHTML = renderMarkdown("**Error.** " + msg);
+        throw new Error(msg);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+          const event = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const line = event.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          try {
+            const obj = JSON.parse(payload);
+            if (obj.delta) {
+              accumulated += obj.delta;
+              contentEl.innerHTML = renderMarkdown(accumulated);
+              scrollToBottom();
+            } else if (obj.error) {
+              accumulated += "\n\n**Error:** " + obj.error;
+              contentEl.innerHTML = renderMarkdown(accumulated);
+            } else if (obj.done) {
+              // end of stream
+            }
+          } catch {
+            // ignore malformed chunk
+          }
+        }
+      }
+    } catch (e) {
+      if (e.name === "AbortError") {
+        accumulated += accumulated ? "\n\n_(stopped)_" : "_(stopped)_";
+        contentEl.innerHTML = renderMarkdown(accumulated);
+      } else {
+        console.error(e);
+      }
+    } finally {
+      contentEl.classList.remove("typing");
+      enhanceCodeBlocks(contentEl);
+      abortController = null;
+      setStreaming(false);
+      if (accumulated.trim()) {
+        c.messages.push({ role: "assistant", content: accumulated });
+        c.updatedAt = Date.now();
+        save();
+      } else {
+        // remove the empty assistant bubble
+        assistantWrap.remove();
+      }
+      scrollToBottom(true);
+    }
+  };
+
+  const stopGeneration = () => {
+    if (abortController) abortController.abort();
+  };
+
+  // ---------- Composer ----------
+  const autoResize = () => {
+    const ta = els.input;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 220) + "px";
+  };
+
+  els.input.addEventListener("input", autoResize);
+  els.input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (isStreaming) return;
+      const text = els.input.value;
+      if (!text.trim()) return;
+      els.input.value = "";
+      autoResize();
+      sendMessage(text);
+    }
+  });
+
+  els.composer.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (isStreaming) return;
+    const text = els.input.value;
+    if (!text.trim()) return;
+    els.input.value = "";
+    autoResize();
+    sendMessage(text);
+  });
+
+  els.stopBtn.addEventListener("click", stopGeneration);
+  els.newChatBtn.addEventListener("click", () => {
+    if (isStreaming) stopGeneration();
+    createChat();
+    els.input.focus();
+  });
+  els.clearBtn.addEventListener("click", () => {
+    if (confirm("Clear this conversation?")) {
+      if (isStreaming) stopGeneration();
+      clearActive();
+    }
+  });
+
+  // Sidebar toggles
+  els.collapseBtn.addEventListener("click", () => {
+    els.app.classList.toggle("sidebar-collapsed");
+  });
+  els.openSidebarBtn.addEventListener("click", () => {
+    els.app.classList.toggle("sidebar-collapsed");
+    els.app.classList.toggle("sidebar-open");
+  });
+
+  // Suggestion buttons
+  document.querySelectorAll(".suggestion").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const p = btn.dataset.prompt || btn.textContent.trim();
+      els.input.value = p;
+      autoResize();
+      els.input.focus();
+    });
+  });
+
+  // ---------- Health / model ----------
+  const refreshHealth = async () => {
+    try {
+      const res = await fetch("/api/health");
+      const data = await res.json();
+      els.modelName.textContent = data.model || "local-model";
+      els.modelPill.classList.remove("offline");
+      els.modelPill.title = `${data.model}\n${data.endpoint || ""}`;
+    } catch {
+      els.modelName.textContent = "offline";
+      els.modelPill.classList.add("offline");
+    }
+  };
+
+  // ---------- Init ----------
+  const init = () => {
+    load();
+    if (chats.length === 0) createChat();
+    if (!getChat(activeId)) activeId = chats[0].id;
+    renderSidebar();
+    renderMessages();
+    autoResize();
+    refreshHealth();
+    setInterval(refreshHealth, 20000);
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
   }
-}
-
-function resetLesson() {
-  startLesson(state.topic);
-}
-
-els.btnBack.addEventListener("click", () => showView("dashboard"));
-els.btnCheck.addEventListener("click", () => checkLesson());
-els.btnReset.addEventListener("click", () => resetLesson());
-els.btnToDashboard.addEventListener("click", () => showView("dashboard"));
-
-fetch("/api/health")
-  .then((r) => r.json())
-  .then((d) => {
-    if (d.model) els.modelHint.textContent = d.model;
-  })
-  .catch(() => {});
-
-renderDashboard();
-refreshStreakDisplay();
-showView("dashboard");
+})();

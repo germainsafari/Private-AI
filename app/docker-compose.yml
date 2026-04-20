@@ -16,4 +16,4 @@ services:
 
 models:
   llm:
-    model: ai/gemma4:latest
+    model: ai/gemma3:latest

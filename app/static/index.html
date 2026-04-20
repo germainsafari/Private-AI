@@ -1,79 +1,187 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
+    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Polski — practice</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <title>Admind Chat</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/assets/css/style.css?v=1" />
+    <script
+      src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"
+      defer
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"
+      defer
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"
+      defer
+    ></script>
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap"
       rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css"
     />
-    <link rel="stylesheet" href="/assets/css/style.css" />
   </head>
   <body>
-    <div id="app" class="app">
-      <header class="topbar">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true"></span>
-          <span class="brand-text">Polski</span>
+    <div class="app">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <button class="new-chat" id="newChatBtn" title="New chat">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            <span>New chat</span>
+          </button>
+          <button class="icon-btn collapse-btn" id="collapseBtn" title="Collapse">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
         </div>
-        <div class="streak" id="streakBadge" title="Day streak">
-          <span class="streak-flame" aria-hidden="true">🔥</span>
-          <span id="streakCount">0</span>
-          <span class="streak-label">day streak</span>
+        <div class="chat-list" id="chatList"></div>
+        <div class="sidebar-footer">
+          <div class="model-pill" id="modelPill" title="Connected model">
+            <span class="dot"></span>
+            <span id="modelName">connecting…</span>
+          </div>
         </div>
-      </header>
+      </aside>
 
       <main class="main">
-        <!-- Dashboard -->
-        <section id="viewDashboard" class="view view--active">
-          <div class="hero">
-            <h1>Learn Polish, one story at a time</h1>
-            <p class="hero-sub">
-              Short AI-built passages with drag-and-drop words — like your favourite
-              language app, tuned for Polish.
-            </p>
+        <header class="topbar">
+          <button class="icon-btn menu-btn" id="openSidebarBtn" title="Open sidebar">
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M3 12h18M3 6h18M3 18h18" />
+            </svg>
+          </button>
+          <div class="brand">
+            <span class="logo">⚡</span>
+            <span class="brand-name">Admind</span>
           </div>
-          <div class="lesson-grid" id="lessonGrid"></div>
-        </section>
-
-        <!-- Lesson -->
-        <section id="viewLesson" class="view" hidden>
-          <button type="button" class="back-link" id="btnBack">← Dashboard</button>
-          <div class="lesson-card">
-            <p class="lesson-topic" id="lessonTopicLabel"></p>
-            <h2 class="lesson-title" id="lessonTitle"></h2>
-            <p class="lesson-hint" id="lessonHint"></p>
-            <div class="passage" id="passage"></div>
-            <p class="bank-label">Word bank</p>
-            <div class="word-bank" id="wordBank"></div>
-            <div class="lesson-actions">
-              <button type="button" class="btn btn--ghost" id="btnReset">Reset</button>
-              <button type="button" class="btn btn--primary" id="btnCheck">Check</button>
-            </div>
-            <p class="feedback" id="feedback" role="status"></p>
-          </div>
-        </section>
-
-        <!-- Success -->
-        <section id="viewDone" class="view" hidden>
-          <div class="done-panel">
-            <div class="done-icon" aria-hidden="true">✓</div>
-            <h2>Świetnie!</h2>
-            <p id="doneMessage">You nailed that sentence.</p>
-            <button type="button" class="btn btn--primary" id="btnToDashboard">
-              Back to lessons
+          <div class="top-right">
+            <button class="icon-btn" id="clearBtn" title="Clear conversation">
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z" />
+              </svg>
             </button>
           </div>
-        </section>
-      </main>
+        </header>
 
-      <footer class="footer">
-        <span>Runs on your machine with Docker Model Runner · Model <code id="modelHint">ai/gemma4</code></span>
-      </footer>
+        <section class="chat" id="chat">
+          <div class="welcome" id="welcome">
+            <div class="welcome-logo">⚡</div>
+            <h1>How can I help you today?</h1>
+            <p class="welcome-sub">
+              Powered by your private GPU model over Tailscale. Nothing leaves your
+              network.
+            </p>
+            <div class="suggestions">
+              <button class="suggestion" data-prompt="Explain quantum entanglement like I'm a curious teenager.">
+                <strong>Explain</strong>
+                <span>quantum entanglement simply</span>
+              </button>
+              <button class="suggestion" data-prompt="Write a Python function that debounces another function.">
+                <strong>Code</strong>
+                <span>a debounce helper in Python</span>
+              </button>
+              <button class="suggestion" data-prompt="Draft a polite email declining a meeting because I'm on deep work.">
+                <strong>Write</strong>
+                <span>a polite decline email</span>
+              </button>
+              <button class="suggestion" data-prompt="Give me 5 creative weekend project ideas for a web developer.">
+                <strong>Brainstorm</strong>
+                <span>weekend project ideas</span>
+              </button>
+            </div>
+          </div>
+          <div class="messages" id="messages"></div>
+        </section>
+
+        <footer class="composer-wrap">
+          <form class="composer" id="composer">
+            <textarea
+              id="input"
+              rows="1"
+              placeholder="Message Admind…"
+              autocomplete="off"
+              autofocus
+            ></textarea>
+            <div class="composer-actions">
+              <button
+                type="button"
+                class="icon-btn stop-btn hidden"
+                id="stopBtn"
+                title="Stop generating"
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+              </button>
+              <button type="submit" class="send-btn" id="sendBtn" title="Send">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M5 12l14-7-7 14-2-5-5-2z" />
+                </svg>
+              </button>
+            </div>
+          </form>
+          <p class="disclaimer">
+            Admind can make mistakes. Verify important information.
+          </p>
+        </footer>
+      </main>
     </div>
-    <script src="/assets/js/app.js" type="module"></script>
+
+    <script src="/assets/js/app.js?v=1" defer></script>
   </body>
 </html>
