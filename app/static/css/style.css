@@ -948,6 +948,186 @@ textarea {
   }
 }
 
+/* -------- Vision badge -------- */
+.vision-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  border-radius: 999px;
+  font-size: 11px;
+  color: #4ade80;
+  margin-top: 8px;
+}
+.vision-badge.hidden {
+  display: none;
+}
+
+/* -------- Attach button -------- */
+.attach-btn {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.attach-btn:hover {
+  color: var(--accent);
+  background: rgba(255, 210, 74, 0.1);
+}
+
+/* -------- Suggestion with icon -------- */
+.suggestion.has-icon {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+.suggestion.has-icon svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.suggestion.has-icon > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* -------- Image preview container -------- */
+.image-preview-container {
+  max-width: var(--maxw);
+  margin: 0 auto 8px;
+  padding: 0 4px;
+}
+.image-preview-container.hidden {
+  display: none;
+}
+
+.image-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.image-preview {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.image-preview img {
+  display: block;
+  max-width: 120px;
+  max-height: 90px;
+  object-fit: cover;
+}
+.image-preview .remove-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.image-preview .remove-btn:hover {
+  background: var(--danger);
+}
+.image-preview .remove-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* -------- Drag overlay -------- */
+.drag-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 11, 15, 0.9);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.drag-overlay.hidden {
+  display: none;
+}
+.drag-overlay-content {
+  text-align: center;
+  color: var(--text);
+}
+.drag-overlay-content svg {
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+.drag-overlay-content p {
+  font-size: 18px;
+  font-weight: 500;
+}
+
+/* -------- Images in messages -------- */
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.msg-images img {
+  max-width: 300px;
+  max-height: 200px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.msg-images img:hover {
+  transform: scale(1.02);
+}
+
+/* Image lightbox */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.9);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+.lightbox.hidden {
+  display: none;
+}
+.lightbox img {
+  max-width: 95vw;
+  max-height: 95vh;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
 /* -------- Print -------- */
 @media print {
   .sidebar,
@@ -972,5 +1152,23 @@ textarea {
   
   .msg {
     break-inside: avoid;
+  }
+}
+
+/* -------- Mobile adjustments for images -------- */
+@media (max-width: 767px) {
+  .image-preview img {
+    max-width: 80px;
+    max-height: 60px;
+  }
+  
+  .msg-images img {
+    max-width: 200px;
+    max-height: 150px;
+  }
+  
+  .suggestion.has-icon svg {
+    width: 18px;
+    height: 18px;
   }
 }

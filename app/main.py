@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -38,7 +38,8 @@ API_KEY = _api if _api else "not-needed"
 
 DEFAULT_SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
-    "You are Admind, a helpful, concise, and thoughtful AI assistant. "
+    "You are Admind, a helpful, concise, and thoughtful AI assistant with vision capabilities. "
+    "You can analyze images, documents, charts, and diagrams. "
     "Answer clearly and use Markdown (including code blocks with language tags) when useful.",
 ).strip()
 
@@ -55,37 +56,70 @@ app.add_middleware(
 )
 
 
+class ImageContent(BaseModel):
+    type: str = "image_url"
+    image_url: dict[str, str]
+
+
+class TextContent(BaseModel):
+    type: str = "text"
+    text: str
+
+
 class ChatMessage(BaseModel):
     role: str = Field(..., pattern=r"^(system|user|assistant)$")
-    content: str
+    content: Union[str, list[Union[TextContent, ImageContent, dict[str, Any]]]]
 
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     system: Optional[str] = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=1024, ge=1, le=8192)
+    max_tokens: int = Field(default=2048, ge=1, le=16384)
     stream: bool = True
 
 
-def _build_messages(body: ChatRequest) -> list[dict[str, str]]:
+def _build_messages(body: ChatRequest) -> list[dict[str, Any]]:
     system_content = (body.system or DEFAULT_SYSTEM_PROMPT).strip()
-    msgs: list[dict[str, str]] = []
+    msgs: list[dict[str, Any]] = []
     if system_content:
         msgs.append({"role": "system", "content": system_content})
+    
     for m in body.messages:
         if m.role == "system":
             continue
-        msgs.append({"role": m.role, "content": m.content})
+        
+        if isinstance(m.content, str):
+            msgs.append({"role": m.role, "content": m.content})
+        elif isinstance(m.content, list):
+            content_list = []
+            for item in m.content:
+                if isinstance(item, dict):
+                    content_list.append(item)
+                elif hasattr(item, "model_dump"):
+                    content_list.append(item.model_dump())
+                else:
+                    content_list.append(item)
+            msgs.append({"role": m.role, "content": content_list})
+        else:
+            msgs.append({"role": m.role, "content": str(m.content)})
+    
     return msgs
 
 
 @app.post("/api/chat")
 def chat(body: ChatRequest) -> Any:
     messages = _build_messages(body)
+    
+    has_images = any(
+        isinstance(m.get("content"), list) and 
+        any(c.get("type") == "image_url" for c in m["content"] if isinstance(c, dict))
+        for m in messages
+    )
+    
     logger.info(
         f"Chat request: {len(messages)} msgs, stream={body.stream}, "
-        f"model={MODEL_NAME} @ {OPENAI_BASE}"
+        f"has_images={has_images}, model={MODEL_NAME} @ {OPENAI_BASE}"
     )
 
     if not body.stream:
@@ -152,6 +186,7 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "model": MODEL_NAME,
         "endpoint": OPENAI_BASE,
+        "vision": True,
     }
 
 

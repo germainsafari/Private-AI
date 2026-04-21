@@ -1,8 +1,9 @@
 (() => {
   "use strict";
 
-  const STORAGE_KEY = "admind.chats.v1";
-  const ACTIVE_KEY = "admind.active.v1";
+  const STORAGE_KEY = "admind.chats.v2";
+  const ACTIVE_KEY = "admind.active.v2";
+  const MAX_IMAGE_SIZE = 4 * 1024 * 1024; // 4MB limit for base64
 
   const $ = (sel) => document.querySelector(sel);
   const els = {
@@ -15,6 +16,7 @@
     clearBtn: $("#clearBtn"),
     modelName: $("#modelName"),
     modelPill: $("#modelPill"),
+    visionBadge: $("#visionBadge"),
     chat: $("#chat"),
     messages: $("#messages"),
     welcome: $("#welcome"),
@@ -22,14 +24,19 @@
     input: $("#input"),
     sendBtn: $("#sendBtn"),
     stopBtn: $("#stopBtn"),
+    attachBtn: $("#attachBtn"),
+    fileInput: $("#fileInput"),
+    imagePreviewContainer: $("#imagePreviewContainer"),
+    imagePreviews: $("#imagePreviews"),
+    dragOverlay: $("#dragOverlay"),
   };
 
   // ---------- State ----------
-  /** @type {{id:string,title:string,messages:{role:string,content:string}[],createdAt:number,updatedAt:number}[]} */
   let chats = [];
   let activeId = null;
   let abortController = null;
   let isStreaming = false;
+  let pendingImages = []; // {dataUrl: string, file?: File}[]
 
   // ---------- Utils ----------
   const uid = () =>
@@ -126,6 +133,87 @@
     });
   };
 
+  // ---------- Image handling ----------
+  const fileToDataUrl = (file) => {
+    return new Promise((resolve, reject) => {
+      if (file.size > MAX_IMAGE_SIZE) {
+        reject(new Error(`Image too large (max ${MAX_IMAGE_SIZE / 1024 / 1024}MB)`));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const addPendingImage = async (file) => {
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      pendingImages.push({ dataUrl, file });
+      renderPendingImages();
+    } catch (e) {
+      alert(e.message || "Failed to load image");
+    }
+  };
+
+  const removePendingImage = (index) => {
+    pendingImages.splice(index, 1);
+    renderPendingImages();
+  };
+
+  const clearPendingImages = () => {
+    pendingImages = [];
+    renderPendingImages();
+  };
+
+  const renderPendingImages = () => {
+    els.imagePreviews.innerHTML = "";
+    if (pendingImages.length === 0) {
+      els.imagePreviewContainer.classList.add("hidden");
+      return;
+    }
+    els.imagePreviewContainer.classList.remove("hidden");
+    pendingImages.forEach((img, i) => {
+      const preview = document.createElement("div");
+      preview.className = "image-preview";
+      
+      const imgEl = document.createElement("img");
+      imgEl.src = img.dataUrl;
+      imgEl.alt = "Preview";
+      
+      const removeBtn = document.createElement("button");
+      removeBtn.className = "remove-btn";
+      removeBtn.type = "button";
+      removeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>';
+      removeBtn.addEventListener("click", () => removePendingImage(i));
+      
+      preview.appendChild(imgEl);
+      preview.appendChild(removeBtn);
+      els.imagePreviews.appendChild(preview);
+    });
+  };
+
+  // Extract text content from multimodal message
+  const getTextFromContent = (content) => {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter((c) => c.type === "text")
+        .map((c) => c.text)
+        .join("\n");
+    }
+    return "";
+  };
+
+  // Extract images from multimodal message
+  const getImagesFromContent = (content) => {
+    if (!Array.isArray(content)) return [];
+    return content
+      .filter((c) => c.type === "image_url")
+      .map((c) => c.image_url?.url || "");
+  };
+
   // ---------- Chat CRUD ----------
   const createChat = () => {
     const c = {
@@ -155,6 +243,7 @@
   const selectChat = (id) => {
     if (activeId === id) return;
     activeId = id;
+    clearPendingImages();
     save();
     renderSidebar();
     renderMessages();
@@ -166,6 +255,7 @@
     c.messages = [];
     c.title = "New chat";
     c.updatedAt = Date.now();
+    clearPendingImages();
     save();
     renderSidebar();
     renderMessages();
@@ -209,11 +299,15 @@
       return;
     }
     els.welcome.classList.add("hidden");
-    c.messages.forEach((m) => appendMessageDom(m.role, m.content));
+    c.messages.forEach((m) => {
+      const text = getTextFromContent(m.content);
+      const images = getImagesFromContent(m.content);
+      appendMessageDom(m.role, text, images);
+    });
     scrollToBottom(true);
   };
 
-  const appendMessageDom = (role, content) => {
+  const appendMessageDom = (role, content, images = []) => {
     const wrap = document.createElement("div");
     wrap.className = "msg " + role;
 
@@ -231,10 +325,31 @@
       enhanceCodeBlocks(contentEl);
       inner.appendChild(contentEl);
     } else {
+      // User message
+      const msgContent = document.createElement("div");
+      msgContent.className = "user-msg-content";
+      
+      // Show images if any
+      if (images.length > 0) {
+        const imagesDiv = document.createElement("div");
+        imagesDiv.className = "msg-images";
+        images.forEach((src) => {
+          const img = document.createElement("img");
+          img.src = src;
+          img.alt = "Uploaded image";
+          img.addEventListener("click", () => openLightbox(src));
+          imagesDiv.appendChild(img);
+        });
+        msgContent.appendChild(imagesDiv);
+      }
+      
       const bubble = document.createElement("div");
       bubble.className = "bubble";
       bubble.textContent = content;
-      inner.appendChild(bubble);
+      msgContent.appendChild(bubble);
+      
+      inner.appendChild(msgContent);
+      
       const av = document.createElement("div");
       av.className = "avatar user";
       av.textContent = "You";
@@ -256,6 +371,36 @@
     }
   };
 
+  // ---------- Lightbox ----------
+  let lightboxEl = null;
+  
+  const openLightbox = (src) => {
+    if (!lightboxEl) {
+      lightboxEl = document.createElement("div");
+      lightboxEl.className = "lightbox hidden";
+      lightboxEl.innerHTML = `
+        <button class="lightbox-close">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+        <img src="" alt="Full size" />
+      `;
+      lightboxEl.addEventListener("click", closeLightbox);
+      document.body.appendChild(lightboxEl);
+    }
+    lightboxEl.querySelector("img").src = src;
+    lightboxEl.classList.remove("hidden");
+    document.body.style.overflow = "hidden";
+  };
+  
+  const closeLightbox = () => {
+    if (lightboxEl) {
+      lightboxEl.classList.add("hidden");
+      document.body.style.overflow = "";
+    }
+  };
+
   // ---------- Streaming chat ----------
   const setStreaming = (on) => {
     isStreaming = on;
@@ -263,29 +408,54 @@
     els.stopBtn.classList.toggle("hidden", !on);
     if (on) {
       els.input.setAttribute("disabled", "true");
+      els.attachBtn.setAttribute("disabled", "true");
     } else {
       els.input.removeAttribute("disabled");
+      els.attachBtn.removeAttribute("disabled");
       els.input.focus();
     }
   };
 
   const sendMessage = async (text) => {
     const content = (text || "").trim();
-    if (!content || isStreaming) return;
+    if ((!content && pendingImages.length === 0) || isStreaming) return;
 
     let c = activeChat();
     if (!c) c = createChat();
 
-    c.messages.push({ role: "user", content });
+    // Build multimodal content if images present
+    let messageContent;
+    let displayImages = [];
+    
+    if (pendingImages.length > 0) {
+      messageContent = [];
+      pendingImages.forEach((img) => {
+        messageContent.push({
+          type: "image_url",
+          image_url: { url: img.dataUrl }
+        });
+        displayImages.push(img.dataUrl);
+      });
+      if (content) {
+        messageContent.push({ type: "text", text: content });
+      } else {
+        messageContent.push({ type: "text", text: "What's in this image?" });
+      }
+    } else {
+      messageContent = content;
+    }
+
+    c.messages.push({ role: "user", content: messageContent });
     if (!c.title || c.title === "New chat") {
-      c.title = titleFromMessage(content);
+      c.title = titleFromMessage(content || "Image analysis");
     }
     c.updatedAt = Date.now();
     save();
     renderSidebar();
 
     els.welcome.classList.add("hidden");
-    appendMessageDom("user", content);
+    appendMessageDom("user", content || "What's in this image?", displayImages);
+    clearPendingImages();
     scrollToBottom(true);
 
     const assistantWrap = appendMessageDom("assistant", "");
@@ -369,7 +539,6 @@
         c.updatedAt = Date.now();
         save();
       } else {
-        // remove the empty assistant bubble
         assistantWrap.remove();
       }
       scrollToBottom(true);
@@ -393,7 +562,6 @@
       e.preventDefault();
       if (isStreaming) return;
       const text = els.input.value;
-      if (!text.trim()) return;
       els.input.value = "";
       autoResize();
       sendMessage(text);
@@ -404,7 +572,6 @@
     e.preventDefault();
     if (isStreaming) return;
     const text = els.input.value;
-    if (!text.trim()) return;
     els.input.value = "";
     autoResize();
     sendMessage(text);
@@ -413,6 +580,7 @@
   els.stopBtn.addEventListener("click", stopGeneration);
   els.newChatBtn.addEventListener("click", () => {
     if (isStreaming) stopGeneration();
+    clearPendingImages();
     createChat();
     els.input.focus();
   });
@@ -420,6 +588,72 @@
     if (confirm("Clear this conversation?")) {
       if (isStreaming) stopGeneration();
       clearActive();
+    }
+  });
+
+  // ---------- Image upload handlers ----------
+  els.attachBtn.addEventListener("click", () => {
+    els.fileInput.click();
+  });
+
+  els.fileInput.addEventListener("change", async (e) => {
+    const files = e.target.files;
+    if (!files) return;
+    for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        await addPendingImage(file);
+      }
+    }
+    els.fileInput.value = "";
+  });
+
+  // Paste handler
+  document.addEventListener("paste", async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) await addPendingImage(file);
+      }
+    }
+  });
+
+  // Drag and drop
+  let dragCounter = 0;
+  
+  document.addEventListener("dragenter", (e) => {
+    e.preventDefault();
+    dragCounter++;
+    if (e.dataTransfer?.types.includes("Files")) {
+      els.dragOverlay.classList.remove("hidden");
+    }
+  });
+
+  document.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    dragCounter--;
+    if (dragCounter === 0) {
+      els.dragOverlay.classList.add("hidden");
+    }
+  });
+
+  document.addEventListener("dragover", (e) => {
+    e.preventDefault();
+  });
+
+  document.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    els.dragOverlay.classList.add("hidden");
+    
+    const files = e.dataTransfer?.files;
+    if (!files) return;
+    for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        await addPendingImage(file);
+      }
     }
   });
 
@@ -465,11 +699,23 @@
   // Suggestion buttons
   document.querySelectorAll(".suggestion").forEach((btn) => {
     btn.addEventListener("click", () => {
+      const action = btn.dataset.action;
+      if (action === "upload") {
+        els.fileInput.click();
+        return;
+      }
       const p = btn.dataset.prompt || btn.textContent.trim();
       els.input.value = p;
       autoResize();
       els.input.focus();
     });
+  });
+
+  // Escape to close lightbox
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeLightbox();
+    }
   });
 
   // ---------- Health / model ----------
@@ -480,9 +726,17 @@
       els.modelName.textContent = data.model || "local-model";
       els.modelPill.classList.remove("offline");
       els.modelPill.title = `${data.model}\n${data.endpoint || ""}`;
+      
+      // Show vision badge if supported
+      if (data.vision) {
+        els.visionBadge?.classList.remove("hidden");
+      } else {
+        els.visionBadge?.classList.add("hidden");
+      }
     } catch {
       els.modelName.textContent = "offline";
       els.modelPill.classList.add("offline");
+      els.visionBadge?.classList.add("hidden");
     }
   };
 
