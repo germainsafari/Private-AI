@@ -424,12 +424,42 @@
   });
 
   // Sidebar toggles
-  els.collapseBtn.addEventListener("click", () => {
-    els.app.classList.toggle("sidebar-collapsed");
+  const isMobile = () => window.innerWidth <= 767;
+  
+  const closeSidebar = () => {
+    if (isMobile()) {
+      els.app.classList.remove("sidebar-open");
+    } else {
+      els.app.classList.add("sidebar-collapsed");
+    }
+  };
+  
+  const openSidebar = () => {
+    if (isMobile()) {
+      els.app.classList.add("sidebar-open");
+    } else {
+      els.app.classList.remove("sidebar-collapsed");
+    }
+  };
+  
+  els.collapseBtn.addEventListener("click", closeSidebar);
+  els.openSidebarBtn.addEventListener("click", openSidebar);
+  
+  // Close sidebar when clicking outside (mobile overlay)
+  document.addEventListener("click", (e) => {
+    if (!isMobile() || !els.app.classList.contains("sidebar-open")) return;
+    const clickedInSidebar = els.sidebar.contains(e.target);
+    const clickedMenuBtn = els.openSidebarBtn.contains(e.target);
+    if (!clickedInSidebar && !clickedMenuBtn) {
+      closeSidebar();
+    }
   });
-  els.openSidebarBtn.addEventListener("click", () => {
-    els.app.classList.toggle("sidebar-collapsed");
-    els.app.classList.toggle("sidebar-open");
+  
+  // Close sidebar after selecting a chat on mobile
+  els.chatList.addEventListener("click", (e) => {
+    if (isMobile() && e.target.closest(".chat-item")) {
+      setTimeout(closeSidebar, 150);
+    }
   });
 
   // Suggestion buttons

@@ -68,6 +68,7 @@ textarea {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   height: 100vh;
+  height: 100dvh; /* dynamic viewport height for mobile browsers */
   width: 100vw;
   overflow: hidden;
 }
@@ -90,6 +91,7 @@ textarea {
   flex-direction: column;
   min-width: 0;
   transition: transform 0.2s ease, opacity 0.2s ease;
+  overflow: hidden;
 }
 
 .sidebar-header {
@@ -98,6 +100,7 @@ textarea {
   gap: 8px;
   align-items: center;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .new-chat {
@@ -127,6 +130,7 @@ textarea {
   color: var(--text-dim);
   border: 1px solid var(--border-strong);
   background: var(--bg-3);
+  flex-shrink: 0;
 }
 .collapse-btn:hover {
   background: #242834;
@@ -180,6 +184,7 @@ textarea {
   justify-content: center;
   border-radius: 6px;
   transition: opacity 0.1s, background 0.1s, color 0.1s;
+  flex-shrink: 0;
 }
 .chat-item:hover .del,
 .chat-item.active .del {
@@ -193,6 +198,7 @@ textarea {
 .sidebar-footer {
   padding: 12px;
   border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .model-pill {
@@ -216,6 +222,7 @@ textarea {
   border-radius: 50%;
   background: #4ade80;
   box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+  flex-shrink: 0;
 }
 .model-pill.offline .dot {
   background: var(--danger);
@@ -228,7 +235,9 @@ textarea {
   flex-direction: column;
   min-width: 0;
   height: 100vh;
+  height: 100dvh;
   background: var(--bg);
+  overflow: hidden;
 }
 
 .topbar {
@@ -242,6 +251,7 @@ textarea {
   position: sticky;
   top: 0;
   z-index: 10;
+  flex-shrink: 0;
 }
 
 .menu-btn {
@@ -261,6 +271,7 @@ textarea {
   justify-content: center;
   color: var(--text-dim);
   transition: background 0.1s, color 0.1s;
+  flex-shrink: 0;
 }
 .icon-btn:hover {
   background: var(--bg-2);
@@ -292,6 +303,7 @@ textarea {
 .chat {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   scroll-behavior: smooth;
   padding: 16px 0 20px;
   display: flex;
@@ -316,7 +328,7 @@ textarea {
 .welcome h1 {
   margin: 6px 0 8px;
   font-weight: 600;
-  font-size: 28px;
+  font-size: clamp(22px, 5vw, 28px);
   background: linear-gradient(135deg, #fff 0%, #bfc4d1 100%);
   -webkit-background-clip: text;
   background-clip: text;
@@ -325,6 +337,7 @@ textarea {
 .welcome-sub {
   color: var(--text-dim);
   margin: 0 0 28px;
+  font-size: clamp(13px, 3vw, 15px);
 }
 
 .suggestions {
@@ -333,6 +346,7 @@ textarea {
   gap: 10px;
   max-width: 560px;
   margin: 0 auto;
+  padding: 0 10px;
 }
 .suggestion {
   text-align: left;
@@ -390,9 +404,10 @@ textarea {
   background: var(--user-bubble);
   padding: 10px 14px;
   border-radius: 16px 16px 4px 16px;
-  max-width: 80%;
+  max-width: 85%;
   white-space: pre-wrap;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
 .msg.assistant {
@@ -489,12 +504,15 @@ textarea {
   width: 100%;
   margin: 0 0 12px;
   font-size: 14px;
+  display: block;
+  overflow-x: auto;
 }
 .content th,
 .content td {
   border: 1px solid var(--border);
   padding: 6px 10px;
   text-align: left;
+  white-space: nowrap;
 }
 .content th {
   background: var(--bg-2);
@@ -568,6 +586,7 @@ textarea {
   border-top: 1px solid var(--border);
   background: rgba(11, 11, 15, 0.9);
   backdrop-filter: blur(8px);
+  flex-shrink: 0;
 }
 .composer {
   max-width: var(--maxw);
@@ -671,38 +690,287 @@ textarea {
   border: 2px solid transparent;
 }
 
-/* -------- Mobile -------- */
-@media (max-width: 780px) {
+/* -------- Responsive: Large desktop (1400px+) -------- */
+@media (min-width: 1400px) {
+  :root {
+    --maxw: 900px;
+    --sidebar-w: 300px;
+  }
+  .welcome h1 {
+    font-size: 32px;
+  }
+  .suggestions {
+    max-width: 640px;
+  }
+}
+
+/* -------- Responsive: Tablet landscape / small desktop (1024px - 1199px) -------- */
+@media (max-width: 1199px) {
+  :root {
+    --maxw: 700px;
+    --sidebar-w: 240px;
+  }
+}
+
+/* -------- Responsive: Tablet portrait (768px - 1023px) -------- */
+@media (max-width: 1023px) {
+  :root {
+    --sidebar-w: 220px;
+  }
+  .suggestions {
+    max-width: 480px;
+  }
+  .msg {
+    padding: 18px 16px;
+  }
+}
+
+/* -------- Responsive: Mobile / small tablet (max 767px) -------- */
+@media (max-width: 767px) {
   .app {
     grid-template-columns: 0 1fr;
   }
-  .app:not(.sidebar-open) .sidebar {
-    transform: translateX(-100%);
-    opacity: 0;
-    pointer-events: none;
-  }
+  
+  /* Sidebar becomes overlay */
   .sidebar {
     position: fixed;
     left: 0;
     top: 0;
     bottom: 0;
-    width: var(--sidebar-w);
-    z-index: 40;
-    transition: transform 0.2s ease, opacity 0.2s ease;
+    width: min(var(--sidebar-w), 85vw);
+    z-index: 100;
+    transform: translateX(-100%);
+    opacity: 0;
+    pointer-events: none;
   }
+  
+  .app.sidebar-open .sidebar {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  
+  /* Backdrop when sidebar is open */
+  .app.sidebar-open::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 50;
+  }
+  
   .menu-btn {
     display: inline-flex;
   }
-  .msg {
-    padding: 16px 14px;
+  
+  .app.sidebar-collapsed .menu-btn {
+    display: inline-flex;
   }
-  .composer-wrap {
-    padding: 8px 10px 10px;
+  
+  .topbar {
+    padding: 10px 12px;
+    gap: 10px;
   }
+  
+  .brand .brand-name {
+    font-size: 14px;
+  }
+  
+  .welcome {
+    padding: 30px 16px;
+  }
+  
+  .welcome-logo {
+    font-size: 36px;
+  }
+  
+  .welcome-sub {
+    margin-bottom: 24px;
+  }
+  
   .suggestions {
     grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 0;
   }
+  
+  .suggestion {
+    padding: 12px;
+  }
+  
+  .msg {
+    padding: 14px 12px;
+  }
+  
+  .msg .inner {
+    gap: 10px;
+  }
+  
+  .msg.user .bubble {
+    max-width: 90%;
+    padding: 9px 12px;
+  }
+  
+  .avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+  
+  .composer-wrap {
+    padding: 8px 10px 10px;
+    /* Safe area for phones with notch/home indicator */
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  
+  .composer {
+    padding: 6px 6px 6px 12px;
+    border-radius: 16px;
+  }
+  
+  #input {
+    font-size: 16px; /* Prevents iOS zoom on focus */
+    padding: 6px 0;
+  }
+  
+  .send-btn,
+  .stop-btn {
+    width: 34px;
+    height: 34px;
+  }
+  
+  .disclaimer {
+    font-size: 10.5px;
+    margin-top: 4px;
+  }
+  
+  .content pre code {
+    font-size: 12.5px;
+  }
+}
+
+/* -------- Responsive: Very small phones (max 374px) -------- */
+@media (max-width: 374px) {
   .welcome h1 {
-    font-size: 22px;
+    font-size: 20px;
+  }
+  
+  .welcome-sub {
+    font-size: 12px;
+  }
+  
+  .suggestion strong {
+    font-size: 13px;
+  }
+  
+  .suggestion span {
+    font-size: 11px;
+  }
+  
+  .msg {
+    padding: 12px 10px;
+  }
+  
+  .avatar {
+    width: 26px;
+    height: 26px;
+    font-size: 12px;
+  }
+  
+  .brand .brand-name {
+    font-size: 13px;
+  }
+}
+
+/* -------- Touch device optimizations -------- */
+@media (hover: none) and (pointer: coarse) {
+  /* Always show delete button on touch devices */
+  .chat-item .del {
+    opacity: 0.7;
+  }
+  
+  /* Larger touch targets */
+  .icon-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  
+  .chat-item {
+    padding: 12px 10px;
+  }
+  
+  .send-btn,
+  .stop-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* -------- Landscape phone -------- */
+@media (max-height: 500px) and (orientation: landscape) {
+  .welcome {
+    padding: 20px 16px;
+  }
+  
+  .welcome-logo {
+    font-size: 28px;
+    margin-bottom: 6px;
+  }
+  
+  .welcome h1 {
+    font-size: 20px;
+    margin-bottom: 4px;
+  }
+  
+  .welcome-sub {
+    margin-bottom: 16px;
+    font-size: 12px;
+  }
+  
+  .suggestions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  
+  .suggestion {
+    padding: 10px;
+  }
+  
+  .msg {
+    padding: 10px 12px;
+  }
+  
+  .composer-wrap {
+    padding: 6px 10px 8px;
+  }
+  
+  #input {
+    max-height: 100px;
+  }
+}
+
+/* -------- Print -------- */
+@media print {
+  .sidebar,
+  .topbar,
+  .composer-wrap,
+  .disclaimer {
+    display: none !important;
+  }
+  
+  .app {
+    display: block;
+    height: auto;
+  }
+  
+  .main {
+    height: auto;
+  }
+  
+  .chat {
+    overflow: visible;
+  }
+  
+  .msg {
+    break-inside: avoid;
   }
 }
