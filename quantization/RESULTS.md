@@ -48,40 +48,22 @@ savings only show up in VRAM, not on disk.)
 | INT4 (AWQ) | 4 | 1080.0 | 64.4 | 810.5 |
 | INT4 (AWQ) | 8 | 579.4  | 64.0 | 3951.3 |
 
-\* The AWQ concurrency=1 run's throughput number is dragged down by a real,
-one-time JIT/kernel-compilation cost on the very first request against a
-freshly-loaded AWQ model (that single request's TTFT was ~9.3s; every request
-after it was back to ~60ms). This is expected and reproducible — AWQ's custom
-INT4 GEMM kernels compile lazily on first use. All the AWQ *latency* p50
-numbers above already reflect steady-state (post-warm-up) behavior; the
-throughput number for `c=1` specifically includes that one slow request in
-its 12-request average and should be read as a warm-up artifact, not AWQ's
-true single-stream throughput (which the TTFT/total-latency columns show
-clearly is the *fastest* of the three).
+\* AWQ c=1 throughput includes first-request JIT/kernel compile (~9.3s TTFT
+once after load; later requests ~60ms). Latency p50 columns are steady-state;
+treat c=1 tok/s as warm-up-skewed.
 
 ![Quantization comparison](../benchmarks/results/quantization/comparison.png)
 
-## Interpretation
+## Notes
 
-1. **AWQ (INT4) is the clear winner on this hardware for both latency and
-   peak throughput.** Lower TTFT at every concurrency level (~64ms flat vs
-   FP16's ~68-86ms and INT8's ~77-98ms), and the highest peak throughput
-   (1080 tok/s at concurrency 4). This matches the theory: AWQ's weights are
-   4x smaller, so decode is far less memory-bandwidth-bound, and vLLM ships
-   genuinely fast fused INT4 GEMM kernels for it — this isn't "quantization
-   as a compromise," it's a straightforward win here.
-2. **bitsandbytes INT8 is *not* a throughput win** despite using less memory
-   than FP16 — its throughput actually **plateaus lower than FP16** at
-   concurrency 8 (272.7 vs 390.0 tok/s) and its TTFT is consistently the
-   *worst* of the three. This is a known, real characteristic of
-   bitsandbytes: it dequantizes weights on-the-fly with relatively simple
-   CUDA kernels that aren't as aggressively optimized as AWQ's, so it trades
-   memory for compute rather than saving both. It's the right tool when the
-   goal is "make an FP16 checkpoint fit in less VRAM without a separate
-   quantization step," not when the goal is throughput.
-3. **Practical takeaway for a real deployment decision:** if you control the
-   checkpoint (i.e. can pre-quantize with AWQ/GPTQ), do that — it's strictly
-   better here on every axis that matters (latency, throughput, and VRAM).
-   bitsandbytes is a reasonable fallback when you need to quantize an
-   arbitrary FP16 checkpoint at load time with no separate quantization
-   pass, and you're VRAM-constrained rather than throughput-constrained.
+1. **AWQ (INT4)** — best latency and peak throughput here. TTFT ~64ms across
+   concurrency; peak ~1080 tok/s at c=4. Smaller weights + fused INT4 GEMMs
+   in vLLM help decode less memory-bandwidth-bound.
+2. **bitsandbytes INT8** — lower VRAM than FP16, but throughput at c=8 is
+   worse than FP16 (272.7 vs 390.0 tok/s) and TTFT is highest of the three.
+   On-the-fly dequant kernels are less optimized than AWQ's; useful when you
+   need to load an FP16 checkpoint in less memory without a separate quant
+   pass, not when optimizing tokens/sec.
+3. If you can ship a pre-quantized AWQ/GPTQ checkpoint, prefer that on this
+   GPU. Use bitsandbytes when VRAM is the constraint and you cannot
+   pre-quantize.

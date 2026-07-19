@@ -1,18 +1,9 @@
 """
-Request orchestrator: admission control for the inference gateway.
+Admission control in front of the inference backend.
 
-vLLM already performs continuous batching *inside* the engine once a request
-reaches it — in-flight sequences are batched together at the token level so
-new requests can join a batch mid-flight rather than waiting for the whole
-batch to finish. What sits *in front* of that (and what this module provides)
-is missing in a plain reverse-proxy: control over how many requests are
-allowed to be in flight at once, a bounded admission queue with backpressure
-once that queue is saturated, and per-request instrumentation that separates
-queueing delay from actual processing time.
-
-This is the software analogue of the admission/scheduling logic a hardware
-inference accelerator (or a cluster-level scheduler such as NR-NEXUS) applies
-before work ever reaches a compute engine.
+vLLM continuous-batches sequences inside the engine. This module limits how
+many requests may be in flight, bounds the waiting queue (HTTP 429 when full),
+and records per-request queue wait vs processing time vs TTFT.
 """
 
 from __future__ import annotations

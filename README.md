@@ -1,8 +1,6 @@
 # LLM Inference Engineering Platform
 
-A production-minded inference gateway and measurement stack on a bare-metal **NVIDIA RTX 5090**, serving **Qwen2.5-VL** through **vLLM**, with a FastAPI admission-control layer, real-time GPU/latency observability, multi-model SLA routing, and reproducible benchmark results.
-
-This is not "I got a model running." It is instrumentation, overload behavior, quantization trade-offs, and the prefill/decode asymmetry that production serving stacks are built around — measured on real hardware, with numbers committed to the repo.
+Local inference stack: **Qwen2.5-VL** on **vLLM** (NVIDIA RTX 5090), with a FastAPI gateway for admission control, TTFT/latency metrics, GPU telemetry, optional multi-model SLA routing, and committed benchmark results.
 
 ## Architecture
 
@@ -43,20 +41,20 @@ flowchart TD
     Metrics -->|"/api/metrics SSE"| Browser
 ```
 
-## Inference engineering features
+## Features
 
-| Feature | What it demonstrates | Evidence |
+| Feature | Details | Results |
 | --- | --- | --- |
-| Admission control + continuous batching | Bounded in-flight concurrency; overload becomes queue delay, not crashes | [`RESULTS.md`](RESULTS.md) |
-| `/api/metrics` + live dashboard | GPU util/VRAM, queue depth, tokens/s, P50/P95/P99, TTFT | `/dashboard`, [`app/metrics.py`](app/metrics.py) |
-| Streaming + TTFT | First-token latency separated from total latency | SSE `done` payload includes `ttft_ms` |
-| Multi-model SLA routing | Spill to fallback when p95 TTFT breaches SLA | [`router/RESULTS.md`](router/RESULTS.md) |
-| Quantization suite | FP16 vs bitsandbytes INT8 vs AWQ INT4 | [`quantization/RESULTS.md`](quantization/RESULTS.md) |
-| Prefill / decode asymmetry | Empirical motivation for disaggregation; honest single-GPU fallback | [`disaggregation/RESULTS.md`](disaggregation/RESULTS.md) |
+| Admission control | Bounded concurrency, queue depth, HTTP 429 | [`RESULTS.md`](RESULTS.md) |
+| Metrics + dashboard | GPU util/VRAM, queue depth, tok/s, P50/P95/P99, TTFT | `/dashboard`, [`app/metrics.py`](app/metrics.py) |
+| Streaming + TTFT | First-token latency in SSE `done` payload | — |
+| Multi-model SLA routing | Fallback when p95 TTFT breaches SLA | [`router/RESULTS.md`](router/RESULTS.md) |
+| Quantization benchmarks | FP16 vs bitsandbytes INT8 vs AWQ INT4 | [`quantization/RESULTS.md`](quantization/RESULTS.md) |
+| Prefill / decode timing | Measured cost split; disagg notes for single-GPU limits | [`disaggregation/RESULTS.md`](disaggregation/RESULTS.md) |
 
-### Headline numbers (live RTX 5090)
+### Sample numbers (RTX 5090)
 
-From [`RESULTS.md`](RESULTS.md) — text concurrency sweep through the gateway (`MAX_CONCURRENCY=8`):
+Text concurrency sweep via the gateway (`MAX_CONCURRENCY=8`) — see [`RESULTS.md`](RESULTS.md):
 
 | Concurrency | ~Throughput (tok/s) | TTFT p50 | Total p50 |
 | ---: | ---: | ---: | ---: |
@@ -64,7 +62,7 @@ From [`RESULTS.md`](RESULTS.md) — text concurrency sweep through the gateway (
 | 8 | 1043 | 82 ms | 2.1 s |
 | 16 | 1043 | 843 ms | 2.9 s |
 
-Throughput scales nearly linearly to the concurrency ceiling, then plateaus while queued requests absorb delay — admission control working as designed. GPU stayed ~98% utilized at concurrency ≥ 4.
+Throughput rises with concurrency up to the admission ceiling, then flattens while queue wait grows. GPU util ~98% at concurrency ≥ 4.
 
 ## Repository layout
 
@@ -186,8 +184,8 @@ On this single-GPU WSL2 host, launching two concurrent vLLM engines repeatedly c
 
 ## Quantization and disaggregation
 
-- **Quantization:** same Qwen2.5-7B-Instruct checkpoint in FP16, bitsandbytes INT8, and AWQ INT4 — AWQ won on latency and peak throughput on this GPU. [`quantization/RESULTS.md`](quantization/RESULTS.md)
-- **Disaggregation:** measured prefill vs per-token decode cost scaling; documented the real vLLM `kv_transfer_config` surface; did **not** fake a two-process run on one GPU. [`disaggregation/RESULTS.md`](disaggregation/RESULTS.md)
+- **Quantization:** Qwen2.5-7B-Instruct in FP16, bitsandbytes INT8, and AWQ INT4 — see [`quantization/RESULTS.md`](quantization/RESULTS.md).
+- **Prefill/decode:** measured timing vs prompt length; notes on vLLM `kv_transfer_config` and why a two-process run was not done on one GPU — [`disaggregation/RESULTS.md`](disaggregation/RESULTS.md).
 
 ## Docker (gateway only)
 

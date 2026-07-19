@@ -1,11 +1,6 @@
 """
-Observability layer: GPU telemetry (via pynvml/NVML) plus rolling request
-latency, time-to-first-token, and throughput statistics.
-
-This is what turns "I deployed a model" into "I instrument and measure
-inference infrastructure" — the numbers here are exactly what an inference
-accelerator vendor cares about: utilization, memory pressure, tokens/sec,
-and tail latency.
+GPU telemetry (pynvml/NVML) and rolling request stats: wait, TTFT, processing
+latency percentiles, and tokens/sec.
 """
 
 from __future__ import annotations

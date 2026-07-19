@@ -1,18 +1,9 @@
 """
-Multi-model, SLA-aware router.
+Route requests across named backends.
 
-Each backend (a distinct model server, e.g. a large multimodal model and a
-small fast text model) gets its own admission-controlled Orchestrator and its
-own MetricsRegistry, so load on one backend never starves another. The router
-picks a backend by logical name and applies SLA-based graceful degradation:
-if a backend's recent time-to-first-token is breaching its configured target,
-new requests are transparently redirected to a configured fallback backend
-(e.g. spill from the big model onto the small one) rather than queuing
-indefinitely or failing outright.
-
-This is a software analogue of what a cluster-level inference scheduler
-(routing across heterogeneous accelerators/models under SLA constraints) does
-at a larger scale.
+Each backend has its own Orchestrator and MetricsRegistry. If a backend's
+recent p95 TTFT exceeds its SLA, new requests are sent to that backend's
+configured fallback (when set).
 """
 
 from __future__ import annotations

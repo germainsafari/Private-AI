@@ -1,20 +1,9 @@
 """
-Load-test the multi-model SLA router (app/router.py) directly and record when
-requests get transparently degraded from the "primary" backend to its
-configured "fast" fallback.
+Load-test SLA fallback in app/router.py (primary → fast).
 
-Hardware note: this repo's dev rig is a single 32GB GPU. Running two full
-vLLM engines concurrently on it triggered a reproducible WSL2/GPU-PV crash
-during development (see RESULTS.md and router/RESULTS.md) even after
-extensive `--gpu-memory-utilization` tuning -- a real, documented constraint
-of this environment, not a flaw in the routing logic. So for this load test,
-both logical backends point at the *same* underlying vLLM server but are
-independently admission-controlled with different concurrency ceilings and
-SLA targets, via two separate `Backend` instances (each with its own
-Orchestrator + MetricsRegistry). That is exactly what the router would do
-against two physically distinct model servers -- the SLA-breach/fallback
-decision path being exercised here is identical either way; only the two
-target URLs would differ.
+On this single-GPU WSL host, two vLLM engines crashed the VM (see
+router/RESULTS.md), so both logical backends share one vLLM URL with
+separate Orchestrator / SLA settings.
 
 Usage:
     python router_load_test.py --requests 60 --concurrency 12

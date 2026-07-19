@@ -1,4 +1,4 @@
-"""Generate a portfolio PDF: architecture overview + findings + charts."""
+"""Build docs/Inference_Engineering_Report.pdf from results tables and charts."""
 
 from __future__ import annotations
 
@@ -157,14 +157,13 @@ def build():
         )
     )
 
-    story.append(Paragraph("1. What this project is", st["h1"]))
+    story.append(Paragraph("1. Overview", st["h1"]))
     story.append(
         Paragraph(
-            "A production-minded inference gateway in front of a local vLLM OpenAI-compatible "
-            "server. The gateway adds admission control, time-to-first-token (TTFT) instrumentation, "
-            "GPU/latency metrics, a live dashboard, SLA-aware multi-model routing, plus reproducible "
-            "benchmark suites for concurrency, quantization, and prefill/decode asymmetry. "
-            "The work was validated on bare-metal Windows 11 + WSL2 with an RTX 5090.",
+            "FastAPI gateway in front of a local vLLM OpenAI-compatible server (Qwen2.5-VL on "
+            "Windows 11 + WSL2, RTX 5090). The gateway provides admission control, TTFT and latency "
+            "metrics, GPU telemetry, a live dashboard, optional SLA-based multi-model routing, and "
+            "benchmark scripts for concurrency, quantization, and prefill/decode timing.",
             st["body"],
         )
     )
@@ -197,13 +196,13 @@ def build():
         )
     )
 
-    story.append(Paragraph("3. Key finding: admission control changes the failure mode", st["h1"]))
+    story.append(Paragraph("3. Crash under load", st["h1"]))
     story.append(
         Paragraph(
-            "Under concurrency ≥ 4 with default <b>--gpu-memory-utilization 0.9</b>, vLLM crashed "
-            "and took down the WSL2 GPU VM. Restarting at <b>0.85</b> plus a gateway "
-            "<b>MAX_CONCURRENCY=8</b> held cleanly through concurrency 32. Overload became "
-            "<b>bounded queueing delay</b> instead of a crash — the central production lesson.",
+            "At concurrency ≥ 4 with default <b>--gpu-memory-utilization 0.9</b>, vLLM crashed "
+            "and took down the WSL2 GPU VM. With <b>0.85</b> and gateway "
+            "<b>MAX_CONCURRENCY=8</b>, the same sweep completed through concurrency 32 with no "
+            "errors. Overload then showed up as queue wait rather than a process crash.",
             st["body"],
         )
     )
@@ -232,9 +231,9 @@ def build():
     )
     story.append(
         Paragraph(
-            "Throughput scales nearly linearly to the concurrency ceiling (1→8), then plateaus at 16 "
-            "while TTFT rises — requests queue for an admission slot. GPU stays pinned ~98%. "
-            "That plateau is the orchestrator working, not vLLM running out of capacity.",
+            "Throughput scales roughly linearly from concurrency 1→8, then plateaus at 16 while "
+            "TTFT rises (queue wait). GPU stays ~98%. The plateau matches the gateway "
+            "MAX_CONCURRENCY=8 limit.",
             st["body"],
         )
     )
@@ -292,12 +291,10 @@ def build():
     story.append(Paragraph("6. Multi-model SLA routing", st["h1"]))
     story.append(
         Paragraph(
-            "The router keeps an independent orchestrator + metrics registry per logical backend. "
-            "When primary p95 TTFT exceeds its SLA, new requests spill to <b>fast</b>. On this "
-            "single-GPU WSL2 host, two concurrent vLLM engines repeatedly crashed the GPU VM "
-            "(memory-visibility mismatch). The routing decision path was therefore load-tested "
-            "with two logical backends against one physical engine — same control logic that would "
-            "span distinct models/GPUs on a stable multi-engine host.",
+            "Each logical backend has its own orchestrator and metrics. When primary p95 TTFT "
+            "exceeds its SLA, new requests go to <b>fast</b>. Two vLLM engines on this single-GPU "
+            "WSL2 host crashed the VM, so the load test used two logical backends against one "
+            "physical engine (same routing code; different URLs on a multi-engine host).",
             st["body"],
         )
     )
@@ -313,8 +310,7 @@ def build():
     story.append(Spacer(1, 6))
     story.append(
         Paragraph(
-            "After enough samples accumulated, every subsequent request spilled to <b>fast</b>. "
-            "Zero errors across 40 requests. Mechanisms: (1) queue within a backend, (2) spill across backends.",
+            "After enough TTFT samples, later requests went to <b>fast</b>. Zero errors in 40 requests.",
             st["body"],
         )
     )
@@ -355,9 +351,8 @@ def build():
     )
     story.append(
         Paragraph(
-            "<b>Takeaway:</b> On this GPU, AWQ INT4 wins on latency and peak throughput. "
-            "bitsandbytes INT8 helps fit models when you cannot pre-quantize, but is not a "
-            "throughput optimization versus FP16 here.",
+            "On this GPU, AWQ INT4 had the best latency and peak throughput. bitsandbytes INT8 "
+            "reduces VRAM vs FP16 but did not improve tokens/sec here.",
             st["body"],
         )
     )
@@ -366,10 +361,9 @@ def build():
     story.append(
         Paragraph(
             "Prefill is compute-bound and grows with prompt length; decode is memory-bandwidth-bound "
-            "with roughly constant per-token cost. True two-process disaggregation (vLLM "
-            "<b>kv_transfer_config</b> / NIXL connectors) needs separate accelerators — not viable "
-            "on this one-GPU WSL2 rig without repeating known dual-engine crashes. Instead we "
-            "measured the asymmetry that motivates disaggregation.",
+            "with roughly constant per-token cost. Full two-process disaggregation (vLLM "
+            "<b>kv_transfer_config</b>) wants separate GPUs; this host has one, and dual engines "
+            "already crashed WSL2 here. Below is the measured cost split only.",
             st["body"],
         )
     )
@@ -407,15 +401,15 @@ def build():
         )
     )
 
-    story.append(Paragraph("10. Takeaways for inference engineering interviews", st["h1"]))
+    story.append(Paragraph("10. Summary", st["h1"]))
     story.append(
         bullets(
             [
-                "Admission control + KV-cache headroom prevent catastrophic failure modes under load.",
-                "Continuous batching yields near-linear throughput until the concurrency ceiling; beyond that, measure queue wait separately from processing.",
-                "TTFT and goodput under SLAs matter more than peak tok/s alone.",
-                "Quantization is not automatically “faster” — kernel quality (AWQ vs bitsandbytes) dominates.",
-                "Prefill and decode have different bottlenecks; cluster schedulers (e.g. llm-d) belong above this process-local layer when you have multiple accelerators.",
+                "GPU memory headroom and gateway concurrency limits avoided the crash path under load.",
+                "Throughput scales with concurrency until the admission ceiling; beyond that, queue wait grows while tok/s stays flat.",
+                "Separate wait vs processing vs TTFT in metrics; SLA routing can spill to a fallback backend.",
+                "AWQ INT4 beat FP16 and bitsandbytes INT8 on latency and peak throughput in these runs.",
+                "Prefill cost grows with prompt length; decode ms/token stays roughly flat — motivating split serving when multiple GPUs are available.",
             ],
             st,
         )
@@ -424,8 +418,8 @@ def build():
     story.append(Spacer(1, 16))
     story.append(
         Paragraph(
-            "Source: Private-AI / Inference Engineering Platform — results under benchmarks/results/ "
-            "and RESULTS.md, router/RESULTS.md, quantization/RESULTS.md, disaggregation/RESULTS.md.",
+            "Data: benchmarks/results/, RESULTS.md, router/RESULTS.md, "
+            "quantization/RESULTS.md, disaggregation/RESULTS.md.",
             st["footer"],
         )
     )

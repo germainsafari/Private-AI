@@ -1,13 +1,8 @@
 """
-Empirically isolate prefill time from per-token decode time on the live
-gateway, as motivation for prefill/decode disaggregation (see
-disaggregation/RESULTS.md for why this repo documents the *motivation*
-empirically rather than running genuinely separate prefill/decode workers).
+Measure prefill vs per-token decode time on the live gateway.
 
-Method: for each prompt length, fire one request with max_tokens=1 (the
-response's TTFT is ~pure prefill time: one forward pass over the whole
-prompt, then stop) and one request with max_tokens=N (TTFT is still ~prefill
-time, and (total_time - ttft) / (N-1) is the marginal per-token decode time).
+For each prompt length: max_tokens=1 (TTFT ≈ prefill); max_tokens=N then
+(total - TTFT) / (N-1) ≈ decode ms/token. See disaggregation/RESULTS.md.
 
 Usage:
     python prefill_decode_probe.py --out results/prefill_decode.csv
