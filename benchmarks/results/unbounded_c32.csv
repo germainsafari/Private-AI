@@ -1,0 +1,2 @@
+label,concurrency,requests,ok,errors,wall_s,ttft_p50_ms,ttft_p95_ms,ttft_p99_ms,total_p50_ms,total_p95_ms,total_p99_ms,approx_tokens_per_sec,gpu_util_before,gpu_util_after,mem_used_before_mb,mem_used_after_mb
+unbounded_c32,32,40,40,0,3.833,280.0,283.3,283.9,2028.5,2030.5,2030.7,2251.2,1.0,98.0,28038.0,28037.0

@@ -1,0 +1,4 @@
+label,concurrency,requests,ok,errors,wall_s,ttft_p50_ms,ttft_p95_ms,ttft_p99_ms,total_p50_ms,total_p95_ms,total_p99_ms,approx_tokens_per_sec,gpu_util_before,gpu_util_after,mem_used_before_mb,mem_used_after_mb
+long_c1,1,10,10,0,15.774,24.4,154.2,238.3,1530.2,1679.1,1762.3,142.1,2.0,98.0,28037.0,28017.0
+long_c4,4,10,10,0,4.824,37.8,39.0,39.1,1569.3,1571.2,1571.5,458.8,98.0,98.0,28017.0,28017.0
+long_c8,8,10,10,0,3.309,60.7,61.6,61.8,1627.2,1627.7,1627.8,695.8,98.0,99.0,28017.0,28017.0

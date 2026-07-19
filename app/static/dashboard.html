@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inference Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/assets/css/style.css?v=3" />
+    <link rel="stylesheet" href="/assets/css/dashboard.css?v=1" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+  </head>
+  <body class="dash-body">
+    <div class="dash">
+      <header class="dash-header">
+        <div class="brand">
+          <span class="logo">⚡</span>
+          <span class="brand-name">Inference Dashboard</span>
+        </div>
+        <div class="dash-header-right">
+          <span class="conn-pill" id="connPill"><span class="dot"></span><span id="connLabel">connecting…</span></span>
+          <a class="back-link" href="/">&larr; Back to chat</a>
+        </div>
+      </header>
+
+      <main class="dash-grid">
+        <section class="card card-gpu">
+          <h2>GPU</h2>
+          <div class="gpu-name" id="gpuName">—</div>
+          <div class="stat-row">
+            <div class="stat">
+              <div class="stat-label">SM utilization</div>
+              <div class="stat-value" id="gpuUtil">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Memory</div>
+              <div class="stat-value" id="gpuMem">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Power</div>
+              <div class="stat-value" id="gpuPower">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Temp</div>
+              <div class="stat-value" id="gpuTemp">—</div>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="gpuChart" height="90"></canvas>
+          </div>
+        </section>
+
+        <section class="card card-throughput">
+          <h2>Throughput</h2>
+          <div class="stat-row">
+            <div class="stat">
+              <div class="stat-label">Tokens / sec</div>
+              <div class="stat-value accent" id="tokensPerSec">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Total requests</div>
+              <div class="stat-value" id="totalRequests">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Errors</div>
+              <div class="stat-value" id="totalErrors">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Rejected (429)</div>
+              <div class="stat-value" id="totalRejected">—</div>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="throughputChart" height="90"></canvas>
+          </div>
+        </section>
+
+        <section class="card card-queue">
+          <h2>Orchestrator</h2>
+          <div class="stat-row">
+            <div class="stat">
+              <div class="stat-label">Queue depth</div>
+              <div class="stat-value" id="queueDepth">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Active requests</div>
+              <div class="stat-value" id="activeRequests">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Max concurrency</div>
+              <div class="stat-value" id="maxConcurrency">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Max queue depth</div>
+              <div class="stat-value" id="maxQueueDepth">—</div>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="queueChart" height="90"></canvas>
+          </div>
+        </section>
+
+        <section class="card card-latency">
+          <h2>Latency (ms)</h2>
+          <table class="latency-table">
+            <thead>
+              <tr><th></th><th>P50</th><th>P95</th><th>P99</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Time to first token</td><td id="ttftP50">—</td><td id="ttftP95">—</td><td id="ttftP99">—</td></tr>
+              <tr><td>Queue wait</td><td id="waitP50">—</td><td id="waitP95">—</td><td id="waitP99">—</td></tr>
+              <tr><td>Processing</td><td id="procP50">—</td><td id="procP95">—</td><td id="procP99">—</td></tr>
+              <tr><td>Total (end-to-end)</td><td id="totalP50">—</td><td id="totalP95">—</td><td id="totalP99">—</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/js/dashboard.js?v=1" defer></script>
+  </body>
+</html>

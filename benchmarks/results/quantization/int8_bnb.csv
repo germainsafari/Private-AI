@@ -1,0 +1,4 @@
+label,concurrency,requests,ok,errors,wall_s,ttft_p50_ms,ttft_p95_ms,ttft_p99_ms,total_p50_ms,total_p95_ms,total_p99_ms,approx_tokens_per_sec,gpu_util_before,gpu_util_after,mem_used_before_mb,mem_used_after_mb
+int8_c1,1,12,12,0,11.771,77.0,411.6,735.6,909.5,1420.9,1827.2,219.9,0.0,96.0,31220.0,31210.0
+int8_c4,4,12,12,0,9.266,97.6,100.7,102.8,2929.9,3276.3,3321.2,285.9,96.0,98.0,31210.0,31212.0
+int8_c8,8,12,12,0,8.893,98.4,3267.4,3267.5,5841.0,6147.2,6224.2,272.7,98.0,98.0,31212.0,31214.0

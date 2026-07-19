@@ -1,8 +1,8 @@
 (() => {
   "use strict";
 
-  const STORAGE_KEY = "admind.chats.v2";
-  const ACTIVE_KEY = "admind.active.v2";
+  const STORAGE_KEY = "inference.chats.v2";
+  const ACTIVE_KEY = "inference.active.v2";
   const MAX_IMAGE_SIZE = 4 * 1024 * 1024; // 4MB limit for base64
 
   const $ = (sel) => document.querySelector(sel);

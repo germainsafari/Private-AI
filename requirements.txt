@@ -2,3 +2,5 @@ fastapi==0.115.6
 uvicorn[standard]==0.32.1
 openai==1.57.4
 python-dotenv==1.0.1
+pynvml==11.5.3
+httpx==0.28.1
