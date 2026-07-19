@@ -2,9 +2,15 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional, Union
+
+# Ensure sibling modules (orchestrator, router, metrics) are importable even
+# when the entrypoint is executed from a different working directory, e.g. on
+# Vercel's Python runtime where the function runs from the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
