@@ -6,10 +6,17 @@
 
 | Setting | Value |
 | --- | --- |
-| **Root Directory** | `.` (repository root — where `vercel.json` lives) |
-| **Do not** use multi-service import | Vercel was detecting `render.yaml` at repo root; Render config now lives in `deploy/render.yaml` only |
+| **Root Directory** | `.` (repository root) |
+| **Framework** | Vercel reads root `vercel.json` → single **FastAPI** service `gateway` in `app/` |
+| **Ignore extra tiles** | Do not import `benchmarks` or duplicate `app` tiles separately |
 
-`vercel.json` builds `app/main.py` with `@vercel/python` and bundles `app/**`.
+`render.yaml` and `docker-compose*.yml` live under `deploy/` only so the import UI does not treat the repo as an unconfigured multi-service monorepo.
+
+`vercel.json` (Services format):
+
+```json
+"services": { "gateway": { "root": "app/", "framework": "fastapi", "entrypoint": "main:app" } }
+```
 
 ### Architecture
 
@@ -32,6 +39,13 @@ Browser → Vercel (FastAPI) → OPENAI_BASE_URL → Cloudflare Tunnel → Docke
 | `REQUEST_TIMEOUT_SECONDS` | Optional | `60` |
 
 Never set `http://127.0.0.1` on Vercel — it cannot reach your machine.
+
+### New Vercel account / import from GitHub
+
+1. **Add New → Project** → import `germainsafari/Private-AI`.
+2. **Root Directory:** `./` (default).
+3. If the UI shows **Application Preset: Services** and several detected apps, that is OK after this commit — root `vercel.json` defines **one** public service (`gateway`). Click **Deploy** (do not use “Import single project” only for `benchmarks`).
+4. Add environment variables (below) **before** or right after first deploy, then **Redeploy**.
 
 ### After push or redeploy
 

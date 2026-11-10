@@ -1,5 +1,5 @@
-# Run from "Private AI" folder: docker compose up --build
-# Or use app/docker-compose.yml after: cd app
+# Local Docker Compose only — kept out of repo root so Vercel does not enter "Services" scan mode.
+# From repo root: docker compose -f deploy/docker-compose.yml up --build
 
 services:
   app:
