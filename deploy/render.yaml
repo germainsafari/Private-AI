@@ -1,0 +1,20 @@
+# Render Blueprint: https://render.com/docs/yaml-spec
+# Intentionally NOT in repo root — Vercel imports this repo using root vercel.json only.
+# On Render: New → Blueprint → point at deploy/render.yaml in this repo.
+#
+# Set API_KEY, OPENAI_BASE_URL, MODEL_NAME in the Render dashboard.
+
+services:
+  - type: web
+    name: polski-app
+    runtime: docker
+    dockerfilePath: ./app/Dockerfile
+    dockerContext: ./app
+    healthCheckPath: /api/health
+    envVars:
+      - key: OPENAI_BASE_URL
+        value: https://api.openai.com/v1
+      - key: MODEL_NAME
+        value: gpt-4o-mini
+      - key: API_KEY
+        sync: false

@@ -222,7 +222,7 @@ A shareable write-up with architecture summary, tables, and all benchmark charts
 
 ## Deploy / Funnel
 
-See [`DEPLOY.md`](DEPLOY.md) for Vercel environment variables and Tailscale Funnel notes.  
+See [`DEPLOY.md`](DEPLOY.md) for Vercel deploy (`vercel.json` at repo root), Cloudflare Tunnel (`private-llm.admindagency.com` → local vLLM), and env vars. Render blueprint lives in [`deploy/render.yaml`](deploy/render.yaml) only.  
 One-shot local stack helper: [`scripts/start-wsl-vllm-and-funnel.ps1`](scripts/start-wsl-vllm-and-funnel.ps1).
 
 ## License
