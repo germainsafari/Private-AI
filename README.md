@@ -49,6 +49,7 @@ flowchart TD
 | Metrics + dashboard | GPU util/VRAM, queue depth, tok/s, P50/P95/P99, TTFT | `/dashboard`, [`app/metrics.py`](app/metrics.py) |
 | Streaming + TTFT | First-token latency in SSE `done` payload | — |
 | Multi-model SLA routing | Fallback when p95 TTFT breaches SLA | [`router/RESULTS.md`](router/RESULTS.md) |
+| Document ingest | PDF/DOCX/PPTX/XLSX/TXT parsed as text; scans + embedded images via vision | [`docs/DOCUMENT_INGEST.md`](docs/DOCUMENT_INGEST.md) |
 | Quantization benchmarks | FP16 vs bitsandbytes INT8 vs AWQ INT4 | [`quantization/RESULTS.md`](quantization/RESULTS.md) |
 | Prefill / decode timing | Measured cost split; disagg notes for single-GPU limits | [`disaggregation/RESULTS.md`](disaggregation/RESULTS.md) |
 
@@ -70,6 +71,7 @@ Throughput rises with concurrency up to the admission ceiling, then flattens whi
 .
 ├── app/
 │   ├── main.py              # FastAPI gateway (async, streaming, metrics)
+│   ├── ingest.py            # Document parsing + vision fallbacks
 │   ├── orchestrator.py      # Admission control + request tickets
 │   ├── metrics.py           # NVML GPU + rolling latency/throughput
 │   ├── router.py            # SLA-aware multi-backend routing
@@ -158,6 +160,8 @@ python benchmarks/plot_results.py benchmarks/results/text_sweep.csv
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/chat` | Chat completions (SSE streaming by default) |
+| `POST` | `/api/ingest` | Parse PDF/Office/text uploads → `combined_text` + vision images |
+| `GET` | `/api/ingest/formats` | Allowed extensions and ingest limits |
 | `GET` | `/api/health` | Liveness + model endpoint |
 | `GET` | `/api/models` | Upstream model list |
 | `GET` | `/api/metrics` | Snapshot: GPU, queue, latency percentiles, tok/s |
@@ -210,8 +214,21 @@ Always put API keys / auth in front of any public Funnel URL.
 - Distinct secrets for gateway vs vLLM when both are exposed
 - Never ship backend secrets into browser JS
 - Bound `MAX_OUTPUT_TOKENS`, request timeouts, and queue depth
-- Validate image size / MIME types (client enforces a 4MB upload cap)
+- Validate image size / MIME types (client enforces a 4MB upload cap for raw images; documents up to 25 MB server-side — watch Vercel body limits)
 - Disable Funnel when not needed
+
+## Document attachments (chat UI)
+
+1. Attach `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.txt`, etc. (or drag-drop).
+2. The gateway extracts text, pulls embedded images from Word/PowerPoint, and rasterizes scan-like PDF pages.
+3. The model receives **text blocks** plus **image_url** parts in one user message.
+
+Legacy `.doc` / `.odt` / `.rtf` work **locally** when LibreOffice is installed (`SOFFICE_PATH`). See [`docs/DOCUMENT_INGEST.md`](docs/DOCUMENT_INGEST.md).
+
+```powershell
+cd app
+python -m pytest tests/test_ingest.py -q
+```
 
 ## Findings report (PDF)
 
@@ -220,10 +237,71 @@ A shareable write-up with architecture summary, tables, and all benchmark charts
 - [`docs/Inference_Engineering_Report.pdf`](docs/Inference_Engineering_Report.pdf)
 - Regenerate: `python docs/generate_report_pdf.py`
 
-## Deploy / Funnel
+## Deploy
 
-See [`DEPLOY.md`](DEPLOY.md) for Vercel deploy (`vercel.json` at repo root), Cloudflare Tunnel (`private-llm.admindagency.com` → local vLLM), and env vars. Render blueprint lives in [`deploy/render.yaml`](deploy/render.yaml) only.  
-One-shot local stack helper: [`scripts/start-wsl-vllm-and-funnel.ps1`](scripts/start-wsl-vllm-and-funnel.ps1).
+**Recommended (same idea as [Ppttx maker](../Ppttx%20maker/docs/13-deploy-for-team.md)):** tunnel the **FastAPI gateway** on your PC (`:3000`), not only vLLM. Optional thin UI on Vercel with [`meta api-base`](app/static/index.html). Comparison: [`docs/VERCEL_LESSONS_FROM_DECK_BUILDER.md`](docs/VERCEL_LESSONS_FROM_DECK_BUILDER.md).
+
+**Alternative:** run everything on Vercel (Python gateway) — see below; uploads and cold starts are more constrained.
+
+### Tunnel gateway (easiest)
+
+Production layout: **browser → Cloudflare → FastAPI (:3000) → private-llm tunnel → vLLM**.
+
+```powershell
+cd app
+uvicorn main:app --host 127.0.0.1 --port 3000
+# Cloudflare: new hostname -> http://localhost:3000
+```
+
+### Deploy to Vercel (all-in gateway)
+
+Layout: **browser → Vercel (this gateway) → Cloudflare tunnel → vLLM on your PC**.
+
+### 1. Keep inference online at home
+
+```powershell
+docker start vllm
+Get-Service cloudflared   # org tunnel → https://private-llm.admindagency.com/v1
+curl.exe https://private-llm.admindagency.com/v1/models
+```
+
+### 2. Push code
+
+Ensure `main` includes root [`vercel.json`](vercel.json) (single FastAPI service in `app/`).
+
+### 3. Create Vercel project (new account / team)
+
+1. [vercel.com](https://vercel.com) → **Add New → Project** → import `germainsafari/Private-AI`.
+2. **Root Directory:** `./` (repo root, not `app/` alone).
+3. Framework may show **Services** — deploy using repo `vercel.json` (one `gateway` service).
+4. **Environment variables** (Production + Preview):
+
+| Variable | Example |
+| --- | --- |
+| `OPENAI_BASE_URL` | `https://private-llm.admindagency.com/v1` |
+| `MODEL_NAME` | `qwen3.6-35b-a3b` (must match `GET …/v1/models`) |
+| `API_KEY` | `not-needed` or your vLLM key |
+| `MAX_UPLOAD_MB` | `10` on Hobby if large uploads fail |
+| `MAX_VISION_IMAGES` | `12` |
+
+5. **Deploy**, then verify:
+
+```powershell
+curl.exe https://YOUR-PROJECT.vercel.app/api/health
+curl.exe https://YOUR-PROJECT.vercel.app/api/ingest/formats
+```
+
+Expect `"backend_reachable": true`, `"documents": true`.
+
+6. Optional **custom domain** → Project → Settings → Domains.
+
+### 4. What does *not* deploy to Vercel
+
+- vLLM / Docker — stays on your machine.
+- LibreOffice legacy conversion — local gateway only.
+- LanguageTool — separate tunnel (`docs/LANGUAGETOOL.md`).
+
+Full checklist: [`DEPLOY.md`](DEPLOY.md). Local funnel helper: [`scripts/start-wsl-vllm-and-funnel.ps1`](scripts/start-wsl-vllm-and-funnel.ps1). Render blueprint: [`deploy/render.yaml`](deploy/render.yaml) only.
 
 ## License
 

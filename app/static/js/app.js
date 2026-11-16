@@ -1,9 +1,26 @@
 (() => {
   "use strict";
 
+  const API_BASE = (
+    document.querySelector('meta[name="api-base"]')?.getAttribute("content") || ""
+  ).replace(/\/$/, "");
+  const apiUrl = (path) => `${API_BASE}${path}`;
+
   const STORAGE_KEY = "inference.chats.v2";
   const ACTIVE_KEY = "inference.active.v2";
-  const MAX_IMAGE_SIZE = 4 * 1024 * 1024; // 4MB limit for base64
+  const MAX_IMAGE_SIZE = 4 * 1024 * 1024; // 4MB limit for base64 data URLs
+  const MAX_FILE_SIZE = 25 * 1024 * 1024; // server ingest default
+  let DOC_EXT = new Set([
+    ".pdf",
+    ".docx",
+    ".txt",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".json",
+    ".xlsx",
+    ".pptx",
+  ]);
 
   const $ = (sel) => document.querySelector(sel);
   const els = {
@@ -36,7 +53,7 @@
   let activeId = null;
   let abortController = null;
   let isStreaming = false;
-  let pendingImages = []; // {dataUrl: string, file?: File}[]
+  let pendingAttachments = []; // { kind: 'image'|'document', file, dataUrl?, name? }[]
 
   // ---------- Utils ----------
   const uid = () =>
@@ -133,7 +150,15 @@
     });
   };
 
-  // ---------- Image handling ----------
+  // ---------- Attachments (images + documents) ----------
+  const extOf = (name) => {
+    const i = name.lastIndexOf(".");
+    return i >= 0 ? name.slice(i).toLowerCase() : "";
+  };
+
+  const isDocumentFile = (file) => DOC_EXT.has(extOf(file.name || ""));
+  const isImageFile = (file) => (file.type || "").startsWith("image/");
+
   const fileToDataUrl = (file) => {
     return new Promise((resolve, reject) => {
       if (file.size > MAX_IMAGE_SIZE) {
@@ -147,51 +172,97 @@
     });
   };
 
-  const addPendingImage = async (file) => {
-    try {
-      const dataUrl = await fileToDataUrl(file);
-      pendingImages.push({ dataUrl, file });
-      renderPendingImages();
-    } catch (e) {
-      alert(e.message || "Failed to load image");
+  const addPendingFile = async (file) => {
+    if (!file) return;
+    if (isImageFile(file)) {
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        pendingAttachments.push({ kind: "image", file, dataUrl, name: file.name });
+        renderPendingAttachments();
+      } catch (e) {
+        alert(e.message || "Failed to load image");
+      }
+      return;
     }
+    if (isDocumentFile(file)) {
+      if (file.size > MAX_FILE_SIZE) {
+        alert(`File too large (max ${MAX_FILE_SIZE / 1024 / 1024}MB): ${file.name}`);
+        return;
+      }
+      pendingAttachments.push({ kind: "document", file, name: file.name });
+      renderPendingAttachments();
+      return;
+    }
+    alert(`Unsupported file type: ${file.name || "unknown"}`);
   };
 
-  const removePendingImage = (index) => {
-    pendingImages.splice(index, 1);
-    renderPendingImages();
+  const removePendingAttachment = (index) => {
+    pendingAttachments.splice(index, 1);
+    renderPendingAttachments();
   };
 
-  const clearPendingImages = () => {
-    pendingImages = [];
-    renderPendingImages();
+  const clearPendingAttachments = () => {
+    pendingAttachments = [];
+    renderPendingAttachments();
   };
 
-  const renderPendingImages = () => {
+  const renderPendingAttachments = () => {
     els.imagePreviews.innerHTML = "";
-    if (pendingImages.length === 0) {
+    if (pendingAttachments.length === 0) {
       els.imagePreviewContainer.classList.add("hidden");
       return;
     }
     els.imagePreviewContainer.classList.remove("hidden");
-    pendingImages.forEach((img, i) => {
-      const preview = document.createElement("div");
-      preview.className = "image-preview";
-      
-      const imgEl = document.createElement("img");
-      imgEl.src = img.dataUrl;
-      imgEl.alt = "Preview";
-      
+    pendingAttachments.forEach((item, i) => {
       const removeBtn = document.createElement("button");
       removeBtn.className = "remove-btn";
       removeBtn.type = "button";
-      removeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>';
-      removeBtn.addEventListener("click", () => removePendingImage(i));
-      
-      preview.appendChild(imgEl);
-      preview.appendChild(removeBtn);
-      els.imagePreviews.appendChild(preview);
+      removeBtn.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>';
+      removeBtn.addEventListener("click", () => removePendingAttachment(i));
+
+      if (item.kind === "image") {
+        const preview = document.createElement("div");
+        preview.className = "image-preview";
+        const imgEl = document.createElement("img");
+        imgEl.src = item.dataUrl;
+        imgEl.alt = "Preview";
+        preview.appendChild(imgEl);
+        preview.appendChild(removeBtn);
+        els.imagePreviews.appendChild(preview);
+      } else {
+        const preview = document.createElement("div");
+        preview.className = "file-preview";
+        const icon = document.createElement("span");
+        icon.className = "file-icon";
+        icon.textContent = "📄";
+        const name = document.createElement("span");
+        name.className = "file-name";
+        name.textContent = item.name || "Document";
+        name.title = item.name || "";
+        preview.appendChild(icon);
+        preview.appendChild(name);
+        preview.appendChild(removeBtn);
+        els.imagePreviews.appendChild(preview);
+      }
     });
+  };
+
+  const ingestDocuments = async (docItems) => {
+    const fd = new FormData();
+    docItems.forEach((d) => fd.append("files", d.file, d.name || d.file.name));
+    const res = await fetch(apiUrl("/api/ingest"), { method: "POST", body: fd });
+    if (!res.ok) {
+      let detail = "Document parse failed";
+      try {
+        const err = await res.json();
+        detail = err.detail || detail;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
+    return res.json();
   };
 
   // Extract text content from multimodal message
@@ -243,7 +314,7 @@
   const selectChat = (id) => {
     if (activeId === id) return;
     activeId = id;
-    clearPendingImages();
+    clearPendingAttachments();
     save();
     renderSidebar();
     renderMessages();
@@ -255,10 +326,19 @@
     c.messages = [];
     c.title = "New chat";
     c.updatedAt = Date.now();
-    clearPendingImages();
+    clearPendingAttachments();
     save();
     renderSidebar();
     renderMessages();
+  };
+
+  const displayUserText = (m) => {
+    if (m.userText != null && m.userText !== "") return m.userText;
+    const raw = getTextFromContent(m.content);
+    const marker = "\n\n--- Attached documents ---";
+    const idx = raw.indexOf(marker);
+    if (idx >= 0) return raw.slice(0, idx).trim() || raw;
+    return raw;
   };
 
   // ---------- Rendering ----------
@@ -300,14 +380,22 @@
     }
     els.welcome.classList.add("hidden");
     c.messages.forEach((m) => {
-      const text = getTextFromContent(m.content);
+      const text = m.role === "user" ? displayUserText(m) : getTextFromContent(m.content);
       const images = getImagesFromContent(m.content);
-      appendMessageDom(m.role, text, images);
+      const files = m.meta?.files || [];
+      const warnings = m.meta?.warnings || [];
+      appendMessageDom(m.role, text, images, files, warnings);
     });
     scrollToBottom(true);
   };
 
-  const appendMessageDom = (role, content, images = []) => {
+  const summarizeWarnings = (warnings) => {
+    if (!warnings?.length) return [];
+    const unique = [...new Set(warnings)];
+    return unique.slice(0, 5);
+  };
+
+  const appendMessageDom = (role, content, images = [], fileNames = [], warnings = []) => {
     const wrap = document.createElement("div");
     wrap.className = "msg " + role;
 
@@ -329,7 +417,38 @@
       const msgContent = document.createElement("div");
       msgContent.className = "user-msg-content";
       
-      // Show images if any
+      if (fileNames.length > 0) {
+        const chips = document.createElement("div");
+        chips.className = "msg-file-chips";
+        fileNames.forEach((name) => {
+          const chip = document.createElement("span");
+          chip.className = "msg-file-chip";
+          chip.textContent = name;
+          chip.title = name;
+          chips.appendChild(chip);
+        });
+        msgContent.appendChild(chips);
+      }
+
+      const warnLines = summarizeWarnings(warnings);
+      if (warnLines.length > 0) {
+        const warnEl = document.createElement("div");
+        warnEl.className = "msg-ingest-warnings";
+        warnEl.title = warnings.join("\n");
+        warnLines.forEach((line) => {
+          const p = document.createElement("p");
+          p.textContent = line;
+          warnEl.appendChild(p);
+        });
+        if (warnings.length > warnLines.length) {
+          const more = document.createElement("p");
+          more.className = "more";
+          more.textContent = `+${warnings.length - warnLines.length} more ingest notes`;
+          warnEl.appendChild(more);
+        }
+        msgContent.appendChild(warnEl);
+      }
+
       if (images.length > 0) {
         const imagesDiv = document.createElement("div");
         imagesDiv.className = "msg-images";
@@ -418,44 +537,102 @@
 
   const sendMessage = async (text) => {
     const content = (text || "").trim();
-    if ((!content && pendingImages.length === 0) || isStreaming) return;
+    if ((!content && pendingAttachments.length === 0) || isStreaming) return;
 
     let c = activeChat();
     if (!c) c = createChat();
 
-    // Build multimodal content if images present
+    const docItems = pendingAttachments.filter((a) => a.kind === "document");
+    const imageItems = pendingAttachments.filter((a) => a.kind === "image");
+    const displayImages = [];
+    const fileNames = docItems.map((d) => d.name).filter(Boolean);
+
+    let ingestPayload = null;
+    setStreaming(true);
+    try {
+      if (docItems.length > 0) {
+        ingestPayload = await ingestDocuments(docItems);
+      }
+    } catch (e) {
+      setStreaming(false);
+      alert(e.message || "Could not parse documents");
+      return;
+    }
+    setStreaming(false);
+
+    const defaultDocPrompt =
+      "Please read the attached document(s) and help with my question.";
+    const defaultImagePrompt = "What's in this image?";
+
+    let bodyText = content;
+    if (ingestPayload?.combined_text) {
+      bodyText = `${content || defaultDocPrompt}\n\n--- Attached documents ---\n${ingestPayload.combined_text}`;
+    }
+
+    const hasVision =
+      imageItems.length > 0 || (ingestPayload?.images?.length || 0) > 0;
+
     let messageContent;
-    let displayImages = [];
-    
-    if (pendingImages.length > 0) {
+    if (hasVision || ingestPayload?.combined_text) {
       messageContent = [];
-      pendingImages.forEach((img) => {
+      imageItems.forEach((img) => {
         messageContent.push({
           type: "image_url",
-          image_url: { url: img.dataUrl }
+          image_url: { url: img.dataUrl },
         });
         displayImages.push(img.dataUrl);
       });
-      if (content) {
-        messageContent.push({ type: "text", text: content });
-      } else {
-        messageContent.push({ type: "text", text: "What's in this image?" });
-      }
+      (ingestPayload?.images || []).forEach((img) => {
+        const url = `data:${img.mime};base64,${img.data_base64}`;
+        messageContent.push({
+          type: "image_url",
+          image_url: { url },
+        });
+        displayImages.push(url);
+      });
+      const textPart =
+        bodyText ||
+        (imageItems.length ? defaultImagePrompt : defaultDocPrompt);
+      messageContent.push({ type: "text", text: textPart });
     } else {
       messageContent = content;
     }
 
-    c.messages.push({ role: "user", content: messageContent });
+    const userText =
+      content ||
+      (fileNames.length
+        ? `Attached: ${fileNames.join(", ")}`
+        : imageItems.length
+          ? defaultImagePrompt
+          : "");
+
+    const meta = {
+      files: fileNames,
+      warnings: ingestPayload?.warnings || [],
+    };
+
+    c.messages.push({
+      role: "user",
+      content: messageContent,
+      userText,
+      meta,
+    });
     if (!c.title || c.title === "New chat") {
-      c.title = titleFromMessage(content || "Image analysis");
+      c.title = titleFromMessage(userText || content || "Attachments");
     }
     c.updatedAt = Date.now();
     save();
     renderSidebar();
 
     els.welcome.classList.add("hidden");
-    appendMessageDom("user", content || "What's in this image?", displayImages);
-    clearPendingImages();
+    appendMessageDom(
+      "user",
+      userText,
+      displayImages,
+      fileNames,
+      meta.warnings
+    );
+    clearPendingAttachments();
     scrollToBottom(true);
 
     const assistantWrap = appendMessageDom("assistant", "");
@@ -468,7 +645,7 @@
     let accumulated = "";
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await fetch(apiUrl("/api/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -580,7 +757,7 @@
   els.stopBtn.addEventListener("click", stopGeneration);
   els.newChatBtn.addEventListener("click", () => {
     if (isStreaming) stopGeneration();
-    clearPendingImages();
+    clearPendingAttachments();
     createChat();
     els.input.focus();
   });
@@ -600,8 +777,8 @@
     const files = e.target.files;
     if (!files) return;
     for (const file of files) {
-      if (file.type.startsWith("image/")) {
-        await addPendingImage(file);
+      if (isImageFile(file) || isDocumentFile(file)) {
+        await addPendingFile(file);
       }
     }
     els.fileInput.value = "";
@@ -615,7 +792,7 @@
       if (item.type.startsWith("image/")) {
         e.preventDefault();
         const file = item.getAsFile();
-        if (file) await addPendingImage(file);
+        if (file) await addPendingFile(file);
       }
     }
   });
@@ -651,8 +828,8 @@
     const files = e.dataTransfer?.files;
     if (!files) return;
     for (const file of files) {
-      if (file.type.startsWith("image/")) {
-        await addPendingImage(file);
+      if (isImageFile(file) || isDocumentFile(file)) {
+        await addPendingFile(file);
       }
     }
   });
@@ -719,16 +896,28 @@
   });
 
   // ---------- Health / model ----------
+  const refreshIngestFormats = async () => {
+    try {
+      const res = await fetch(apiUrl("/api/ingest/formats"));
+      const data = await res.json();
+      if (Array.isArray(data.allowed_extensions)) {
+        DOC_EXT = new Set(data.allowed_extensions.map((e) => e.toLowerCase()));
+      }
+    } catch {
+      /* keep defaults */
+    }
+  };
+
   const refreshHealth = async () => {
     try {
-      const res = await fetch("/api/health");
+      const res = await fetch(apiUrl("/api/health"));
       const data = await res.json();
       els.modelName.textContent = data.model || "local-model";
       els.modelPill.classList.remove("offline");
       els.modelPill.title = `${data.model}\n${data.endpoint || ""}`;
       
       // Show vision badge if supported
-      if (data.vision) {
+      if (data.vision || data.documents) {
         els.visionBadge?.classList.remove("hidden");
       } else {
         els.visionBadge?.classList.add("hidden");
@@ -748,6 +937,7 @@
     renderSidebar();
     renderMessages();
     autoResize();
+    refreshIngestFormats();
     refreshHealth();
     setInterval(refreshHealth, 20000);
   };

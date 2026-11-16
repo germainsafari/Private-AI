@@ -13,12 +13,13 @@ from typing import Any, AsyncIterator, Optional, Union
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from ingest import IngestError, combine_results, ingest_available, ingest_capabilities, parse_bytes
 from orchestrator import QueueFullError
 from router import BackendConfig, ModelRouter
 
@@ -164,6 +165,37 @@ def _build_messages(body: ChatRequest) -> list[dict[str, Any]]:
             msgs.append({"role": m.role, "content": str(m.content)})
 
     return msgs
+
+
+@app.post("/api/ingest")
+async def ingest_files(files: list[UploadFile] = File(...)) -> JSONResponse:
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    results = []
+    try:
+        for upload in files:
+            name = (upload.filename or "upload").strip() or "upload"
+            data = await upload.read()
+            results.append(parse_bytes(name, data))
+    except IngestError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        for upload in files:
+            try:
+                await upload.close()
+            except Exception:
+                pass
+
+    batch = combine_results(results)
+    payload = batch.to_api_dict()
+    payload.update(ingest_capabilities())
+    return JSONResponse(payload)
+
+
+@app.get("/api/ingest/formats")
+async def ingest_formats() -> dict[str, Any]:
+    return ingest_capabilities()
 
 
 @app.post("/api/chat")
@@ -319,6 +351,9 @@ async def health() -> dict[str, Any]:
         "endpoint": OPENAI_BASE,
         "backend_reachable": backend_ok,
         "vision": True,
+        "documents": ingest_available(),
+        "libreoffice": ingest_capabilities()["libreoffice"],
+        "allowed_extensions": ingest_capabilities()["allowed_extensions"],
         "multi_model_routing": len(router.backends) > 1,
     }
 

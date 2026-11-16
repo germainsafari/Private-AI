@@ -1043,6 +1043,71 @@ textarea {
   height: 12px;
 }
 
+.file-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  max-width: 220px;
+}
+.file-preview .file-icon {
+  flex-shrink: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+.file-preview .file-name {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-preview .remove-btn {
+  position: static;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.msg-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.msg-file-chip {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted, var(--text));
+}
+
+.msg-ingest-warnings {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-muted, #9ca3af);
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  max-width: 100%;
+}
+.msg-ingest-warnings p {
+  margin: 0 0 4px;
+}
+.msg-ingest-warnings p:last-child {
+  margin-bottom: 0;
+}
+.msg-ingest-warnings p.more {
+  font-style: italic;
+  opacity: 0.85;
+}
+
 /* -------- Drag overlay -------- */
 .drag-overlay {
   position: fixed;
