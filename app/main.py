@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -19,7 +20,15 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ingest import IngestError, combine_results, ingest_available, ingest_capabilities, parse_bytes
+from digest import estimate_tokens, fit_text, transcribe_images
+from ingest import (
+    IngestError,
+    VLLM_MAX_IMAGES_PER_PROMPT,
+    combine_results,
+    ingest_available,
+    ingest_capabilities,
+    parse_bytes,
+)
 from orchestrator import QueueFullError
 from router import BackendConfig, ModelRouter
 
@@ -70,6 +79,33 @@ DEFAULT_SYSTEM_PROMPT = os.getenv(
     "You can analyze images, documents and charts in addition to text. "
     "Use Markdown formatting when it improves clarity.",
 ).strip()
+
+# Qwen3.x on vLLM may return empty `content` and fill `reasoning` when thinking is on.
+LLM_DISABLE_THINKING = os.getenv("LLM_DISABLE_THINKING", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+
+def _llm_extra_kwargs() -> dict[str, Any]:
+    if LLM_DISABLE_THINKING:
+        return {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+    return {}
+
+
+def _assistant_text(message: Any) -> str:
+    content = getattr(message, "content", None) or ""
+    if content:
+        return content
+    return getattr(message, "reasoning", None) or ""
+
+
+def _delta_text(delta: Any) -> str:
+    piece = getattr(delta, "content", None) or ""
+    if piece:
+        return piece
+    return getattr(delta, "reasoning", None) or ""
 
 _backend_configs = [
     BackendConfig(
@@ -167,19 +203,150 @@ def _build_messages(body: ChatRequest) -> list[dict[str, Any]]:
     return msgs
 
 
+MODEL_CONTEXT_TOKENS = int(os.getenv("MODEL_CONTEXT_TOKENS", "0"))
+IMAGE_TOKEN_ESTIMATE = int(os.getenv("IMAGE_TOKEN_ESTIMATE", "3000"))
+PROMPT_RESERVE_TOKENS = int(os.getenv("PROMPT_RESERVE_TOKENS", "6000"))
+_context_cache: dict[str, int] = {}
+
+
+async def _context_tokens(backend: Any) -> int:
+    """Model context window: env override, else vLLM's max_model_len, else 32k."""
+    if MODEL_CONTEXT_TOKENS > 0:
+        return MODEL_CONTEXT_TOKENS
+    name = backend.config.name
+    if name not in _context_cache:
+        size = 32768
+        try:
+            models = await backend.client.models.list()
+            for m in models.data:
+                if m.id == backend.config.model_name:
+                    size = int(getattr(m, "max_model_len", None) or size)
+                    break
+        except Exception as e:
+            logger.warning("could not read max_model_len: %s", e)
+            return size
+        _context_cache[name] = size
+    return _context_cache[name]
+
+
+def _message_tokens(msg: dict[str, Any]) -> int:
+    content = msg.get("content")
+    if isinstance(content, str):
+        return estimate_tokens(content) + 8
+    total = 8
+    for part in content or []:
+        if isinstance(part, dict) and part.get("type") == "image_url":
+            total += IMAGE_TOKEN_ESTIMATE
+        elif isinstance(part, dict):
+            total += estimate_tokens(str(part.get("text", "")))
+    return total
+
+
+def _cap_multimodal_images(
+    messages: list[dict[str, Any]], max_images: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Keep the newest max_images image_url parts; older ones become a text note."""
+    refs: list[tuple[int, int]] = []
+    for mi, msg in enumerate(messages):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for pi, part in enumerate(content):
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                refs.append((mi, pi))
+    excess = len(refs) - max(0, max_images)
+    if excess <= 0:
+        return messages, 0
+    out = copy.deepcopy(messages)
+    for mi, pi in refs[:excess]:
+        out[mi]["content"][pi] = {"type": "text", "text": "[earlier image omitted]"}
+    return out, excess
+
+
+_DOC_MARKER = "\n\n--- Attached documents ---"
+
+
+def _fit_messages(
+    messages: list[dict[str, Any]], budget_tokens: int
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Shrink conversation history until it fits; the newest user turn is kept whole."""
+    notes: list[str] = []
+    msgs = copy.deepcopy(messages)
+
+    def total() -> int:
+        return sum(_message_tokens(m) for m in msgs)
+
+    if total() <= budget_tokens:
+        return msgs, notes
+
+    first = 1 if msgs and msgs[0]["role"] == "system" else 0
+    last = len(msgs) - 1
+
+    # 1. Drop document dumps from older turns (the model already answered about them).
+    for i in range(first, last):
+        if total() <= budget_tokens:
+            break
+        content = msgs[i].get("content")
+        parts = [content] if isinstance(content, str) else [
+            p for p in content or [] if isinstance(p, dict) and p.get("type") == "text"
+        ]
+        for idx, part in enumerate(parts):
+            text = part if isinstance(part, str) else part.get("text", "")
+            cut = text.find(_DOC_MARKER)
+            if cut < 0:
+                continue
+            short = text[:cut] + "\n\n[documents attached earlier in this chat; omitted to fit context]"
+            if isinstance(content, str):
+                msgs[i]["content"] = short
+            else:
+                part["text"] = short
+            notes.append("older attached documents omitted from history to fit context")
+
+    # 2. Drop the oldest turns.
+    while total() > budget_tokens and last - first > 0:
+        msgs.pop(first)
+        last -= 1
+        notes.append("oldest messages dropped to fit context")
+
+    return msgs, sorted(set(notes))
+
+
+def _truncate_text_parts(msg: dict[str, Any], cut_chars: int) -> None:
+    note = "\n\n[… truncated to fit the model context …]"
+    content = msg.get("content")
+    if isinstance(content, str):
+        msg["content"] = content[: max(0, len(content) - cut_chars)] + note
+        return
+    texts = [p for p in content or [] if isinstance(p, dict) and p.get("type") == "text"]
+    if texts:
+        longest = max(texts, key=lambda p: len(p.get("text", "")))
+        text = longest.get("text", "")
+        longest["text"] = text[: max(0, len(text) - cut_chars)] + note
+
+
+def _llm_for_ingest() -> tuple[Any, str, dict[str, Any]]:
+    backend = primary_backend
+    return backend.client, backend.config.model_name, _llm_extra_kwargs()
+
+
 @app.post("/api/ingest")
 async def ingest_files(files: list[UploadFile] = File(...)) -> JSONResponse:
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
     results = []
+    skipped: list[str] = []
     try:
         for upload in files:
             name = (upload.filename or "upload").strip() or "upload"
             data = await upload.read()
-            results.append(parse_bytes(name, data))
-    except IngestError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+            try:
+                results.append(await asyncio.to_thread(parse_bytes, name, data))
+            except IngestError as e:
+                skipped.append(str(e))
+            except Exception as e:
+                logger.exception("ingest failed for %s", name)
+                skipped.append(f"{name}: could not be read ({e})")
     finally:
         for upload in files:
             try:
@@ -187,7 +354,29 @@ async def ingest_files(files: list[UploadFile] = File(...)) -> JSONResponse:
             except Exception:
                 pass
 
+    if not results:
+        raise HTTPException(status_code=400, detail="; ".join(skipped) or "No readable files")
+
+    client, model, extra = _llm_for_ingest()
+    for r in results:
+        if not r.images:
+            continue
+        figures, notes = await transcribe_images(client, model, extra, r.images, r.name)
+        r.warnings.extend(notes)
+        r.text = (r.text + "\n\n" if r.text.strip() else "") + (
+            "[figures and scanned pages, transcribed by the vision model]\n" + figures
+        )
+        r.images = []
+
     batch = combine_results(results)
+    ctx = await _context_tokens(primary_backend)
+    budget_tokens = max(2000, ctx - MAX_OUTPUT_TOKENS - PROMPT_RESERVE_TOKENS)
+    budget_chars = int(budget_tokens * float(os.getenv("CHARS_PER_TOKEN", "2.5")))
+    batch.combined_text, fit_notes = await fit_text(
+        client, model, extra, batch.combined_text, budget_chars
+    )
+    batch.warnings = skipped + batch.warnings + fit_notes
+
     payload = batch.to_api_dict()
     payload.update(ingest_capabilities())
     return JSONResponse(payload)
@@ -201,14 +390,34 @@ async def ingest_formats() -> dict[str, Any]:
 @app.post("/api/chat")
 async def chat(body: ChatRequest) -> Any:
     messages = _build_messages(body)
+    messages, trimmed = _cap_multimodal_images(messages, VLLM_MAX_IMAGES_PER_PROMPT)
+    if trimmed:
+        logger.warning(
+            "Replaced %d older image(s) with a note (vLLM max %d per request)",
+            trimmed,
+            VLLM_MAX_IMAGES_PER_PROMPT,
+        )
+
+    backend, degraded = router.resolve(body.model)
+    ctx = await _context_tokens(backend)
+    max_tokens = min(body.max_tokens, max(256, ctx // 4))
+    messages, fit_notes = _fit_messages(messages, ctx - max_tokens - 512)
+    for note in fit_notes:
+        logger.warning("chat context: %s", note)
+    prompt_tokens = sum(_message_tokens(m) for m in messages)
+    overflow = prompt_tokens + max_tokens + 256 - ctx
+    if overflow > 0 and messages:
+        _truncate_text_parts(messages[-1], int(overflow * float(os.getenv("CHARS_PER_TOKEN", "2.5"))))
+        logger.warning("chat context: newest message truncated by ~%d tokens", overflow)
+        prompt_tokens = sum(_message_tokens(m) for m in messages)
+    max_tokens = max(64, min(max_tokens, ctx - prompt_tokens - 256))
+    body.max_tokens = max_tokens
 
     has_images = any(
         isinstance(m.get("content"), list)
         and any(c.get("type") == "image_url" for c in m["content"] if isinstance(c, dict))
         for m in messages
     )
-
-    backend, degraded = router.resolve(body.model)
 
     try:
         ticket_cm = backend.orchestrator.track()
@@ -230,8 +439,9 @@ async def chat(body: ChatRequest) -> Any:
                 messages=messages,
                 temperature=body.temperature,
                 max_tokens=body.max_tokens,
+                **_llm_extra_kwargs(),
             )
-            content = completion.choices[0].message.content or ""
+            content = _assistant_text(completion.choices[0].message)
             usage = getattr(completion, "usage", None)
             output_tokens = getattr(usage, "completion_tokens", 0) or 0
             ticket.first_token_at = time.perf_counter()
@@ -272,6 +482,7 @@ async def chat(body: ChatRequest) -> Any:
                 max_tokens=body.max_tokens,
                 stream=True,
                 stream_options={"include_usage": True},
+                **_llm_extra_kwargs(),
             )
             async for chunk in stream:
                 usage = getattr(chunk, "usage", None)
@@ -281,7 +492,7 @@ async def chat(body: ChatRequest) -> Any:
                     continue
                 try:
                     delta = chunk.choices[0].delta
-                    piece = getattr(delta, "content", None) or ""
+                    piece = _delta_text(delta)
                 except Exception:
                     piece = ""
                 if piece:

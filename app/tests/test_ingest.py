@@ -3,6 +3,7 @@
 import base64
 import io
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -11,8 +12,10 @@ import pytest
 from ingest import (
     ALLOWED_EXTENSIONS,
     IngestError,
+    VLLM_MAX_IMAGES_PER_PROMPT,
     allowed_extensions,
     combine_results,
+    effective_vision_image_cap,
     parse_bytes,
 )
 
@@ -21,6 +24,13 @@ TINY_PNG = base64.b64decode(
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def _noise_png(side: int = 64) -> bytes:
+    """Random-pixel PNG: big enough to pass the tiny-image and min-bytes filters."""
+    fitz = pytest.importorskip("fitz")
+    pix = fitz.Pixmap(fitz.csRGB, side, side, os.urandom(side * side * 3), False)
+    return pix.tobytes("png")
 
 
 def _minimal_docx_bytes(text: str = "Hello from Word.") -> bytes:
@@ -119,6 +129,71 @@ def test_allowed_extensions_non_empty():
     assert ".pdf" in allowed_extensions()
 
 
+def test_vision_batches_respect_vllm_limit():
+    from digest import _batches
+
+    batches = _batches(list(range(11)), VLLM_MAX_IMAGES_PER_PROMPT)
+    assert all(len(b) <= VLLM_MAX_IMAGES_PER_PROMPT for b in batches)
+    assert sum(len(b) for b in batches) == 11
+    assert effective_vision_image_cap() >= VLLM_MAX_IMAGES_PER_PROMPT
+
+
+def test_docx_keeps_order_headings_and_tables():
+    pytest.importorskip("docx")
+    from docx import Document
+
+    buf = io.BytesIO()
+    doc = Document()
+    doc.add_heading("Budget", level=1)
+    doc.add_paragraph("Before table.")
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Item"
+    table.cell(0, 1).text = "Cost"
+    table.cell(1, 0).text = "Laptops"
+    table.cell(1, 1).text = "12,000"
+    doc.add_paragraph("After table.")
+    doc.save(buf)
+    text = parse_bytes("plan.docx", buf.getvalue()).text
+    assert "# Budget" in text
+    assert "| Laptops | 12,000 |" in text
+    assert text.index("Before table.") < text.index("Laptops") < text.index("After table.")
+
+
+def test_image_upload_is_normalized():
+    r = parse_bytes("photo.png", _noise_png())
+    assert r.kind == "image"
+    assert len(r.images) == 1 and r.images[0].mime == "image/png"
+
+    with pytest.raises(IngestError):
+        parse_bytes("broken.png", b"not an image")
+
+
+def test_docx_many_images_all_kept_and_deduped():
+    pytest.importorskip("docx")
+    from docx import Document
+    from docx.shared import Inches
+
+    buf = io.BytesIO()
+    doc = Document()
+    pngs = [_noise_png() for _ in range(7)]
+    for png in pngs + [pngs[0]]:
+        doc.add_picture(io.BytesIO(png), width=Inches(1.0))
+    doc.save(buf)
+    r = parse_bytes("many.docx", buf.getvalue())
+    assert len(r.images) == 7
+    batch = combine_results([r])
+    assert len(batch.images) == 7
+
+
+def test_split_text_keeps_everything():
+    from digest import _split_text
+
+    text = "\n\n".join(f"para {i} " + "x" * 300 for i in range(200))
+    chunks = _split_text(text, 5000)
+    assert all(len(c) <= 5000 for c in chunks)
+    assert "".join(chunks).replace("\n", "") == text.replace("\n", "")
+
+
 def test_docx_embedded_image():
     pytest.importorskip("docx")
     from docx import Document
@@ -127,7 +202,7 @@ def test_docx_embedded_image():
     buf = io.BytesIO()
     doc = Document()
     doc.add_paragraph("Screenshot below")
-    doc.add_picture(io.BytesIO(TINY_PNG), width=Inches(1.0))
+    doc.add_picture(io.BytesIO(_noise_png()), width=Inches(1.0))
     doc.save(buf)
     r = parse_bytes("shots.docx", buf.getvalue())
     assert r.kind == "docx"

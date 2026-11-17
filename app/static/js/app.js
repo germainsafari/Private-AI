@@ -10,6 +10,7 @@
   const ACTIVE_KEY = "inference.active.v2";
   const MAX_IMAGE_SIZE = 4 * 1024 * 1024; // 4MB limit for base64 data URLs
   const MAX_FILE_SIZE = 25 * 1024 * 1024; // server ingest default
+  let MAX_DIRECT_IMAGES = 4; // vLLM --limit-mm-per-prompt; refreshed from /api/ingest/formats
   let DOC_EXT = new Set([
     ".pdf",
     ".docx",
@@ -174,14 +175,21 @@
 
   const addPendingFile = async (file) => {
     if (!file) return;
-    if (isImageFile(file)) {
+    const name = file.name || `pasted-${Date.now()}.png`;
+    // Large images go through ingest, which downscales them before the vision model.
+    if (isImageFile(file) && file.size <= MAX_IMAGE_SIZE) {
       try {
         const dataUrl = await fileToDataUrl(file);
-        pendingAttachments.push({ kind: "image", file, dataUrl, name: file.name });
+        pendingAttachments.push({ kind: "image", file, dataUrl, name });
         renderPendingAttachments();
       } catch (e) {
         alert(e.message || "Failed to load image");
       }
+      return;
+    }
+    if (isImageFile(file) && file.size <= MAX_FILE_SIZE) {
+      pendingAttachments.push({ kind: "document", file, name });
+      renderPendingAttachments();
       return;
     }
     if (isDocumentFile(file)) {
@@ -542,22 +550,36 @@
     let c = activeChat();
     if (!c) c = createChat();
 
-    const docItems = pendingAttachments.filter((a) => a.kind === "document");
-    const imageItems = pendingAttachments.filter((a) => a.kind === "image");
+    let docItems = pendingAttachments.filter((a) => a.kind === "document");
+    let imageItems = pendingAttachments.filter((a) => a.kind === "image");
+    // Over the per-request image limit: send images through ingest to be transcribed.
+    if (imageItems.length > MAX_DIRECT_IMAGES) {
+      docItems = docItems.concat(imageItems);
+      imageItems = [];
+    }
     const displayImages = [];
     const fileNames = docItems.map((d) => d.name).filter(Boolean);
 
     let ingestPayload = null;
+    let statusEl = null;
     setStreaming(true);
     try {
       if (docItems.length > 0) {
+        els.welcome.classList.add("hidden");
+        statusEl = appendMessageDom("assistant", "");
+        const statusContent = statusEl.querySelector(".content");
+        statusContent.classList.add("typing");
+        statusContent.textContent = `Reading ${docItems.length} attachment(s)…`;
+        scrollToBottom(true);
         ingestPayload = await ingestDocuments(docItems);
       }
     } catch (e) {
+      statusEl?.remove();
       setStreaming(false);
       alert(e.message || "Could not parse documents");
       return;
     }
+    statusEl?.remove();
     setStreaming(false);
 
     const defaultDocPrompt =
@@ -902,6 +924,9 @@
       const data = await res.json();
       if (Array.isArray(data.allowed_extensions)) {
         DOC_EXT = new Set(data.allowed_extensions.map((e) => e.toLowerCase()));
+      }
+      if (Number.isFinite(data.vllm_max_images_per_prompt)) {
+        MAX_DIRECT_IMAGES = data.vllm_max_images_per_prompt;
       }
     } catch {
       /* keep defaults */

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import io
 import json
 import os
@@ -16,14 +17,20 @@ from pathlib import Path
 from typing import Any
 
 MAX_UPLOAD_BYTES = int(float(os.getenv("MAX_UPLOAD_MB", "25")) * 1024 * 1024)
-MAX_EXTRACT_CHARS = int(os.getenv("MAX_EXTRACT_CHARS", "80000"))
-MAX_VISION_IMAGES = int(os.getenv("MAX_VISION_IMAGES", "12"))
-MAX_VISION_PAGES = int(os.getenv("MAX_VISION_PAGES", "12"))
-MAX_EMBEDDED_IMAGES = int(os.getenv("MAX_EMBEDDED_IMAGES", "8"))
+# Safety ceiling only; oversized text is condensed by digest.py, not dropped.
+MAX_EXTRACT_CHARS = int(os.getenv("MAX_EXTRACT_CHARS", "3000000"))
+MAX_TABLE_ROWS = int(os.getenv("MAX_TABLE_ROWS", "200000"))
+# vLLM --limit-mm-per-prompt image count; images are transcribed in batches of this size.
+VLLM_MAX_IMAGES_PER_PROMPT = max(1, int(os.getenv("VLLM_MAX_IMAGES_PER_PROMPT", "4")))
+MAX_VISION_IMAGES = int(os.getenv("MAX_VISION_IMAGES", "60"))
+MAX_VISION_PAGES = int(os.getenv("MAX_VISION_PAGES", "60"))
+MAX_EMBEDDED_IMAGES = int(os.getenv("MAX_EMBEDDED_IMAGES", "60"))
+MIN_EMBEDDED_IMAGE_BYTES = int(os.getenv("MIN_EMBEDDED_IMAGE_BYTES", "3000"))
+MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1600"))
 MIN_PDF_TEXT_CHARS = int(os.getenv("MIN_PDF_TEXT_CHARS", "40"))
 PDF_RENDER_SCALE = float(os.getenv("PDF_RENDER_SCALE", "1.5"))
 PDF_IMAGE_COVERAGE_THRESHOLD = float(os.getenv("PDF_IMAGE_COVERAGE_THRESHOLD", "0.55"))
-MAX_EMBEDDED_IMAGE_BYTES = int(os.getenv("MAX_EMBEDDED_IMAGE_MB", "6")) * 1024 * 1024
+MAX_EMBEDDED_IMAGE_BYTES = int(os.getenv("MAX_EMBEDDED_IMAGE_MB", "15")) * 1024 * 1024
 
 ALLOWED_EXTENSIONS = frozenset(
     {
@@ -36,7 +43,19 @@ ALLOWED_EXTENSIONS = frozenset(
         ".csv",
         ".xlsx",
         ".pptx",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".tif",
+        ".tiff",
     }
+)
+
+IMAGE_EXTENSIONS = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 )
 
 LEGACY_OFFICE_EXTENSIONS = frozenset({".doc", ".odt", ".rtf"})
@@ -153,8 +172,34 @@ def _mime_from_blob(blob: bytes, filename: str = "") -> str:
     }.get(ext, "application/octet-stream")
 
 
+def effective_vision_image_cap() -> int:
+    """Total images per ingest that will be transcribed by the vision model."""
+    return MAX_VISION_IMAGES
+
+
 def _vision_slots_remaining(images: list[VisionImage]) -> int:
-    return max(0, MAX_VISION_IMAGES - len(images))
+    return max(0, effective_vision_image_cap() - len(images))
+
+
+def _normalize_image(blob: bytes) -> bytes | None:
+    """Re-encode any raster PyMuPDF can read as RGB PNG, downscaled; None if unreadable."""
+    try:
+        import fitz
+    except ImportError:
+        return blob if _mime_from_blob(blob).startswith("image/") else None
+    try:
+        pix = fitz.Pixmap(blob)
+        if pix.alpha:
+            pix = fitz.Pixmap(pix, 0)
+        if pix.colorspace is None or pix.colorspace.n != 3:
+            pix = fitz.Pixmap(fitz.csRGB, pix)
+        while max(pix.width, pix.height) > MAX_IMAGE_SIDE:
+            pix.shrink(1)
+        if pix.width < 16 or pix.height < 16:
+            return None
+        return pix.tobytes("png")
+    except Exception:
+        return None
 
 
 def _append_vision_image(
@@ -166,21 +211,21 @@ def _append_vision_image(
     filename: str = "",
 ) -> bool:
     if _vision_slots_remaining(images) <= 0:
-        warnings.append(f"{source}: global vision image cap ({MAX_VISION_IMAGES}) reached")
+        warnings.append(f"{source}: vision image cap ({effective_vision_image_cap()}) reached")
         return False
     if len(blob) > MAX_EMBEDDED_IMAGE_BYTES:
         warnings.append(
             f"{source}: image skipped (over {MAX_EMBEDDED_IMAGE_BYTES // (1024 * 1024)} MB)"
         )
         return False
-    mime = _mime_from_blob(blob, filename)
-    if not mime.startswith("image/"):
-        warnings.append(f"{source}: not an image ({mime}); skipped")
+    png = _normalize_image(blob)
+    if png is None:
+        warnings.append(f"{source}: unsupported or unreadable image format; skipped")
         return False
     images.append(
         VisionImage(
-            mime=mime,
-            data_base64=base64.standard_b64encode(blob).decode("ascii"),
+            mime="image/png",
+            data_base64=base64.standard_b64encode(png).decode("ascii"),
             source=source,
         )
     )
@@ -197,6 +242,7 @@ def _extract_ooxml_media(
     max_count: int,
 ) -> int:
     added = 0
+    seen: set[str] = set()
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             names = sorted(n for n in zf.namelist() if n.startswith(media_prefix) and not n.endswith("/"))
@@ -205,19 +251,24 @@ def _extract_ooxml_media(
                     warnings.append(f"{name}: embedded image cap ({max_count}) reached")
                     break
                 if _vision_slots_remaining(images) <= 0:
-                    warnings.append(f"{name}: global vision cap reached; embedded images omitted")
+                    warnings.append(f"{name}: vision cap reached; remaining embedded images omitted")
                     break
                 blob = zf.read(part)
-                if len(blob) < 64:
+                if len(blob) < MIN_EMBEDDED_IMAGE_BYTES:
                     continue
+                digest = hashlib.sha1(blob).hexdigest()
+                if digest in seen:
+                    continue
+                seen.add(digest)
                 part_name = part.rsplit("/", 1)[-1]
                 if _append_vision_image(
                     images, blob, f"{name} embedded {part_name}", warnings, filename=part_name
                 ):
                     added += 1
-                    warnings.append(f"{name}: embedded image sent to vision ({part_name})")
     except zipfile.BadZipFile:
         warnings.append(f"{name}: could not read package media")
+    if added:
+        warnings.append(f"{name}: {added} embedded image(s) transcribed by the vision model")
     return added
 
 
@@ -270,8 +321,8 @@ def _parse_csv(data: bytes, name: str, warnings: list[str]) -> str:
     reader = csv.reader(buf)
     rows: list[str] = []
     for i, row in enumerate(reader):
-        if i > 5000:
-            warnings.append(f"{name}: CSV truncated after 5000 rows")
+        if i > MAX_TABLE_ROWS:
+            warnings.append(f"{name}: CSV truncated after {MAX_TABLE_ROWS} rows")
             break
         rows.append(" | ".join(row))
     text = "\n".join(rows)
@@ -365,18 +416,76 @@ def _parse_docx(
     except ImportError as e:
         raise IngestError("DOCX support requires python-docx") from e
 
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
     doc = Document(io.BytesIO(data))
     parts: list[str] = []
-    for para in doc.paragraphs:
-        t = (para.text or "").strip()
-        if t:
-            parts.append(t)
 
-    for ti, table in enumerate(doc.tables, start=1):
-        parts.append(f"[table {ti}]")
+    def para_line(para: Paragraph) -> str:
+        t = (para.text or "").strip()
+        if not t:
+            return ""
+        style = (para.style.name if para.style is not None else "") or ""
+        if style.startswith("Heading"):
+            level = "".join(ch for ch in style if ch.isdigit()) or "1"
+            return f"{'#' * min(int(level), 6)} {t}"
+        if style == "Title":
+            return f"# {t}"
+        if "List" in style:
+            return f"- {t}"
+        return t
+
+    def table_lines(table: Table, idx: int) -> list[str]:
+        lines = [f"[table {idx}]"]
         for row in table.rows:
-            cells = [((c.text or "").strip()) for c in row.cells]
-            parts.append(" | ".join(cells))
+            cells: list[str] = []
+            prev = None
+            for cell in row.cells:
+                # merged cells repeat the same object across the span
+                if cell._tc is prev:
+                    continue
+                prev = cell._tc
+                cells.append(" ".join((cell.text or "").split()))
+            lines.append("| " + " | ".join(cells) + " |")
+        return lines
+
+    table_idx = 0
+    body = doc.element.body
+    for child in body.iterchildren():
+        tag = child.tag.rsplit("}", 1)[-1]
+        if tag == "p":
+            line = para_line(Paragraph(child, doc))
+            if line:
+                parts.append(line)
+        elif tag == "tbl":
+            table_idx += 1
+            parts.extend(table_lines(Table(child, doc), table_idx))
+
+    ns_w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    box_texts: list[str] = []
+    for box in body.iter(f"{ns_w}txbxContent"):
+        for p in box.iter(f"{ns_w}p"):
+            t = "".join(node.text or "" for node in p.iter(f"{ns_w}t")).strip()
+            if t and t not in box_texts:
+                box_texts.append(t)
+    if box_texts:
+        parts.append("[text boxes / shapes]")
+        parts.extend(box_texts)
+
+    header_footer: list[str] = []
+    for section in doc.sections:
+        for part in (section.header, section.footer):
+            try:
+                for para in part.paragraphs:
+                    t = (para.text or "").strip()
+                    if t and t not in header_footer:
+                        header_footer.append(t)
+            except Exception:
+                continue
+    if header_footer:
+        parts.append("[headers / footers]")
+        parts.extend(header_footer)
 
     if not parts:
         warnings.append(f"{name}: no paragraph or table text extracted")
@@ -404,8 +513,10 @@ def _parse_xlsx(data: bytes, name: str, warnings: list[str]) -> str:
             row_count = 0
             for row in sheet.iter_rows(values_only=True):
                 row_count += 1
-                if row_count > 3000:
-                    warnings.append(f"{name} sheet {sheet.title}: truncated after 3000 rows")
+                if row_count > MAX_TABLE_ROWS:
+                    warnings.append(
+                        f"{name} sheet {sheet.title}: truncated after {MAX_TABLE_ROWS} rows"
+                    )
                     break
                 cells = ["" if v is None else str(v) for v in row]
                 if any(c.strip() for c in cells):
@@ -532,6 +643,13 @@ def parse_bytes(filename: str, data: bytes) -> FileIngestResult:
     warnings: list[str] = []
     file_images: list[VisionImage] = []
 
+    if ext in IMAGE_EXTENSIONS:
+        if not _append_vision_image(file_images, data, filename, warnings, filename=filename):
+            raise IngestError(f"Could not read image: {filename}")
+        return FileIngestResult(
+            name=filename, kind="image", text="", warnings=warnings, images=file_images
+        )
+
     if ext in LEGACY_OFFICE_EXTENSIONS:
         kind = ext.lstrip(".")
         text = _parse_via_libreoffice(data, filename, ext, warnings)
@@ -553,9 +671,13 @@ def parse_bytes(filename: str, data: bytes) -> FileIngestResult:
 
 
 def combine_results(results: list[FileIngestResult]) -> IngestBatch:
+    """Join per-file text. Images stay on each result; digest.py transcribes them first."""
     blocks: list[str] = []
     all_images: list[VisionImage] = []
     all_warnings: list[str] = []
+
+    catalog = [f"- {r.name} ({r.kind}, {len(r.text):,} chars)" for r in results]
+    blocks.append("## Sources\n" + "\n".join(catalog))
 
     for r in results:
         blocks.append(f"=== FILE: {r.name} ===")
@@ -564,20 +686,9 @@ def combine_results(results: list[FileIngestResult]) -> IngestBatch:
         else:
             blocks.append("(no extractable text)")
         all_warnings.extend(r.warnings)
-        for img in r.images:
-            if len(all_images) >= MAX_VISION_IMAGES:
-                all_warnings.append(
-                    f"Global vision cap ({MAX_VISION_IMAGES}) reached; some images omitted"
-                )
-                break
-            all_images.append(img)
+        all_images.extend(r.images)
 
     combined = "\n\n".join(blocks)
-    combined, batch_truncated = _truncate(combined, all_warnings, "combined upload")
-    if batch_truncated:
-        for r in results:
-            r.truncated = True
-
     return IngestBatch(
         files=results,
         combined_text=combined,
@@ -603,7 +714,8 @@ def ingest_capabilities() -> dict[str, Any]:
         "allowed_extensions": sorted(allowed_extensions()),
         "max_upload_mb": float(os.getenv("MAX_UPLOAD_MB", "25")),
         "max_extract_chars": MAX_EXTRACT_CHARS,
-        "max_vision_images": MAX_VISION_IMAGES,
+        "max_vision_images": effective_vision_image_cap(),
+        "vllm_max_images_per_prompt": VLLM_MAX_IMAGES_PER_PROMPT,
         "max_vision_pages": MAX_VISION_PAGES,
         "max_embedded_images": MAX_EMBEDDED_IMAGES,
         "legacy_office_requires_libreoffice": True,

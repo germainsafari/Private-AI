@@ -282,7 +282,8 @@ Ensure `main` includes root [`vercel.json`](vercel.json) (single FastAPI service
 | `MODEL_NAME` | `qwen3.6-35b-a3b` (must match `GET …/v1/models`) |
 | `API_KEY` | `not-needed` or your vLLM key |
 | `MAX_UPLOAD_MB` | `10` on Hobby if large uploads fail |
-| `MAX_VISION_IMAGES` | `12` |
+| `LLM_DISABLE_THINKING` | `1` |
+| `VLLM_MAX_IMAGES_PER_PROMPT` | `4` (match vLLM `--limit-mm-per-prompt`) |
 
 5. **Deploy**, then verify:
 

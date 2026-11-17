@@ -57,10 +57,11 @@ Browser → Vercel (FastAPI) → OPENAI_BASE_URL → Cloudflare Tunnel → Docke
 | `MAX_OUTPUT_TOKENS` | Optional | `1024` |
 | `REQUEST_TIMEOUT_SECONDS` | Optional | `60` |
 | `MAX_UPLOAD_MB` | Optional | `25` (document ingest) |
-| `MAX_EXTRACT_CHARS` | Optional | `80000` |
-| `MAX_VISION_IMAGES` | Optional | `12` (total vision images per ingest) |
-| `MAX_VISION_PAGES` | Optional | `12` (PDF pages rasterized per file) |
-| `MAX_EMBEDDED_IMAGES` | Optional | `8` (DOCX/PPTX embedded pictures) |
+| `LLM_DISABLE_THINKING` | Recommended | `1` (Qwen3.x) |
+| `VLLM_MAX_IMAGES_PER_PROMPT` | Optional | `4` (match vLLM `--limit-mm-per-prompt`) |
+| `MAX_VISION_IMAGES` | Optional | `60` (images transcribed per file) |
+| `MAX_VISION_PAGES` | Optional | `60` (PDF pages rasterized per file) |
+| `MAX_EMBEDDED_IMAGES` | Optional | `60` (DOCX/PPTX embedded pictures) |
 | `PDF_IMAGE_COVERAGE_THRESHOLD` | Optional | `0.55` |
 
 Never set `http://127.0.0.1` on Vercel — it cannot reach your machine.
