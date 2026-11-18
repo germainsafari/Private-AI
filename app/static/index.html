@@ -7,7 +7,7 @@
     <meta name="api-base" content="" />
     <title>Inference Platform</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="/assets/css/style.css?v=4" />
+    <link rel="stylesheet" href="/assets/css/style.css?v=5" />
     <script
       src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"
       defer
@@ -123,16 +123,20 @@
             <div class="welcome-logo">⚡</div>
             <h1>How can I help you today?</h1>
             <p class="welcome-sub">
-              PDFs, Word, Excel, and PowerPoint are parsed as text; photos and scanned pages use vision.
+              Reads PDFs, Word, Excel, PowerPoint and images, and creates branded reports, documents and decks you can download.
             </p>
             <div class="suggestions">
               <button class="suggestion" data-prompt="Explain quantum entanglement like I'm a curious teenager.">
                 <strong>Explain</strong>
                 <span>quantum entanglement simply</span>
               </button>
-              <button class="suggestion" data-prompt="Write a Python function that debounces another function.">
-                <strong>Code</strong>
-                <span>a debounce helper in Python</span>
+              <button class="suggestion" data-prompt="Create a 10-page PDF report on employer branding trends for 2026, with charts where useful.">
+                <strong>Create</strong>
+                <span>a branded PDF report</span>
+              </button>
+              <button class="suggestion" data-prompt="Make an 8-slide presentation introducing Admind's services to a new client.">
+                <strong>Present</strong>
+                <span>an Admind slide deck</span>
               </button>
               <button class="suggestion has-icon" data-action="upload">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -143,10 +147,6 @@
                 <strong>Analyze</strong>
                 <span>a file, image, or screenshot</span>
               </button>
-              <button class="suggestion" data-prompt="Give me 5 creative weekend project ideas for a web developer.">
-                <strong>Brainstorm</strong>
-                <span>weekend project ideas</span>
-              </button>
             </div>
           </div>
           <div class="messages" id="messages"></div>
@@ -156,6 +156,17 @@
           <!-- Image preview area -->
           <div class="image-preview-container hidden" id="imagePreviewContainer">
             <div class="image-previews" id="imagePreviews"></div>
+          </div>
+
+          <div class="output-bar" id="outputBar" role="radiogroup" aria-label="Output">
+            <span class="output-label">Output</span>
+            <button type="button" class="output-chip active" data-mode="auto" title="Chat, or create a file when you ask for one">Auto</button>
+            <button type="button" class="output-chip" data-mode="chat" title="Always answer in chat">Chat</button>
+            <button type="button" class="output-chip" data-mode="pdf_report" title="Branded PDF report (up to ~40 pages)">PDF</button>
+            <button type="button" class="output-chip" data-mode="docx_document" title="Editable Word document">Word</button>
+            <button type="button" class="output-chip" data-mode="presentation" title="Admind-branded PowerPoint deck">Slides</button>
+            <button type="button" class="output-chip" data-mode="edit_file" title="Edit the attached file, or revise the last generated one">Edit file</button>
+            <button type="button" class="output-chip" data-mode="image" title="Generate an image">Image</button>
           </div>
           
           <form class="composer" id="composer">
@@ -244,6 +255,6 @@
       </div>
     </div>
 
-    <script src="/assets/js/app.js?v=4" defer></script>
+    <script src="/assets/js/app.js?v=5" defer></script>
   </body>
 </html>

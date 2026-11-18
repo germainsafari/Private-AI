@@ -59,6 +59,9 @@ Browser → Vercel (FastAPI) → OPENAI_BASE_URL → Cloudflare Tunnel → Docke
 | `MAX_UPLOAD_MB` | Optional | `25` (document ingest) |
 | `LLM_DISABLE_THINKING` | Recommended | `1` (Qwen3.x) |
 | `VLLM_MAX_IMAGES_PER_PROMPT` | Optional | `4` (match vLLM `--limit-mm-per-prompt`) |
+| `DECK_ENGINE_URL` | For Slides | `https://slides-api.admindagency.com` |
+| `DECK_ENGINE_TOKEN_SECRET` | For Slides | same value as `ENGINE_TOKEN_SECRET` in Ppttx maker `infra/.env` (secret) |
+| `IMAGE_BASE_URL`, `IMAGE_API_KEY`, `IMAGE_MODEL` | Optional | OpenAI-compatible image API; enables the Image output |
 | `MAX_VISION_IMAGES` | Optional | `60` (images transcribed per file) |
 | `MAX_VISION_PAGES` | Optional | `60` (PDF pages rasterized per file) |
 | `MAX_EMBEDDED_IMAGES` | Optional | `60` (DOCX/PPTX embedded pictures) |

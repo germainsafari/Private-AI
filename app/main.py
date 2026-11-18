@@ -14,7 +14,11 @@ from typing import Any, AsyncIterator, Optional, Union
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
+load_dotenv()
+
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +33,10 @@ from ingest import (
     ingest_capabilities,
     parse_bytes,
 )
+import deck_client
+from creator import CreateRequest, Creator, UploadedFile
+from file_edit import EDITABLE_EXTENSIONS
+from images import images_available
 from orchestrator import QueueFullError
 from router import BackendConfig, ModelRouter
 
@@ -387,6 +395,113 @@ async def ingest_formats() -> dict[str, Any]:
     return ingest_capabilities()
 
 
+_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"}
+MAX_CREATE_UPLOAD_BYTES = int(os.getenv("MAX_CREATE_UPLOAD_BYTES", str(4 * 1024 * 1024)))
+
+
+@app.post("/api/create")
+async def create_file(
+    prompt: str = Form(...),
+    action: str = Form("auto"),
+    context: str = Form(""),
+    history: str = Form(""),
+    previous_markdown: str = Form(""),
+    previous_kind: str = Form(""),
+    language: str = Form(""),
+    files: list[UploadFile] = File(default=[]),
+) -> StreamingResponse:
+    uploads: list[UploadedFile] = []
+    for upload in files or []:
+        data = await upload.read()
+        await upload.close()
+        if len(data) > MAX_CREATE_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"{upload.filename} is too large to edit here")
+        name = (upload.filename or "upload").strip() or "upload"
+        text = ""
+        try:
+            text = (await asyncio.to_thread(parse_bytes, name, data)).text
+        except Exception as e:
+            logger.info("create: could not extract text from %s: %s", name, e)
+        uploads.append(UploadedFile(name, data, upload.content_type or "application/octet-stream", text))
+
+    req = CreateRequest(
+        prompt=prompt.strip(),
+        action=action.strip().lower(),
+        context=context,
+        history=history,
+        previous_markdown=previous_markdown,
+        previous_kind=previous_kind,
+        language=language,
+        files=uploads,
+    )
+    creator = Creator(primary_backend.client, primary_backend.config.model_name)
+
+    async def events() -> AsyncIterator[str]:
+        queue: asyncio.Queue[Optional[dict]] = asyncio.Queue()
+
+        async def pump() -> None:
+            try:
+                async for ev in creator.run(req):
+                    await queue.put(ev)
+            except Exception as e:
+                logger.exception("create failed")
+                await queue.put({"type": "error", "message": f"Could not create the file: {e}"})
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(pump())
+        try:
+            while True:
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if ev is None:
+                    break
+                if ev.get("type") == "keepalive":
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"data: {json.dumps(ev)}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        finally:
+            task.cancel()
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@app.get("/api/deck/{job_id}")
+async def deck_status(job_id: str) -> dict[str, Any]:
+    if not deck_client.deck_available():
+        raise HTTPException(status_code=503, detail="Deck engine not configured")
+    try:
+        st = await deck_client.job_status(job_id)
+    except deck_client.DeckError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    out = {
+        "status": st.get("status"),
+        "progress": round(float(st.get("progress") or 0) * 100),
+        "message": st.get("message", ""),
+        "warnings": st.get("warnings", []),
+    }
+    if st.get("status") == "done":
+        previews = st.get("previews") or []
+        count = previews if isinstance(previews, int) else len(previews)
+        out.update(deck_client.public_links(job_id, count, int(st.get("revision") or 0)))
+    return out
+
+
+@app.get("/api/create/capabilities")
+async def create_capabilities() -> dict[str, Any]:
+    return {
+        "pdf": True,
+        "docx": True,
+        "presentation": deck_client.deck_available(),
+        "images": images_available(),
+        "editable_extensions": sorted(EDITABLE_EXTENSIONS | {".pdf"}),
+    }
+
+
 @app.post("/api/chat")
 async def chat(body: ChatRequest) -> Any:
     messages = _build_messages(body)
@@ -566,6 +681,12 @@ async def health() -> dict[str, Any]:
         "libreoffice": ingest_capabilities()["libreoffice"],
         "allowed_extensions": ingest_capabilities()["allowed_extensions"],
         "multi_model_routing": len(router.backends) > 1,
+        "file_creation": {
+            "pdf": True,
+            "docx": True,
+            "presentation": deck_client.deck_available(),
+            "images": images_available(),
+        },
     }
 
 

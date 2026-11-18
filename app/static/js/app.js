@@ -47,6 +47,7 @@
     imagePreviewContainer: $("#imagePreviewContainer"),
     imagePreviews: $("#imagePreviews"),
     dragOverlay: $("#dragOverlay"),
+    outputBar: $("#outputBar"),
   };
 
   // ---------- State ----------
@@ -55,6 +56,39 @@
   let abortController = null;
   let isStreaming = false;
   let pendingAttachments = []; // { kind: 'image'|'document', file, dataUrl?, name? }[]
+  let outputMode = "auto";
+
+  // ---------- Generated files (IndexedDB; localStorage is too small for them) ----------
+  const fileStore = (() => {
+    let dbPromise = null;
+    const open = () =>
+      (dbPromise ||= new Promise((resolve, reject) => {
+        const req = indexedDB.open("inference.files", 1);
+        req.onupgradeneeded = () => req.result.createObjectStore("files");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      }));
+    const run = async (mode, fn) => {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("files", mode);
+        const req = fn(tx.objectStore("files"));
+        tx.oncomplete = () => resolve(req?.result);
+        tx.onerror = () => reject(tx.error);
+      });
+    };
+    return {
+      put: (key, value) => run("readwrite", (s) => s.put(value, key)),
+      get: (key) => run("readonly", (s) => s.get(key)).catch(() => undefined),
+      del: (key) => run("readwrite", (s) => s.delete(key)).catch(() => undefined),
+    };
+  })();
+
+  const forgetArtifacts = (messages) => {
+    (messages || []).forEach((m) =>
+      (m.meta?.artifacts || []).forEach((a) => a.id && fileStore.del(a.id))
+    );
+  };
 
   // ---------- Utils ----------
   const uid = () =>
@@ -311,6 +345,7 @@
   };
 
   const deleteChat = (id) => {
+    forgetArtifacts(getChat(id)?.messages);
     chats = chats.filter((c) => c.id !== id);
     if (activeId === id) activeId = chats[0]?.id || null;
     if (!activeId) createChat();
@@ -331,6 +366,7 @@
   const clearActive = () => {
     const c = activeChat();
     if (!c) return;
+    forgetArtifacts(c.messages);
     c.messages = [];
     c.title = "New chat";
     c.updatedAt = Date.now();
@@ -392,7 +428,10 @@
       const images = getImagesFromContent(m.content);
       const files = m.meta?.files || [];
       const warnings = m.meta?.warnings || [];
-      appendMessageDom(m.role, text, images, files, warnings);
+      const wrap = appendMessageDom(m.role, text, images, files, warnings);
+      if (m.role === "assistant" && m.meta?.artifacts?.length) {
+        renderArtifacts(wrap.querySelector(".content"), m.meta.artifacts);
+      }
     });
     scrollToBottom(true);
   };
@@ -543,15 +582,9 @@
     }
   };
 
-  const sendMessage = async (text) => {
-    const content = (text || "").trim();
-    if ((!content && pendingAttachments.length === 0) || isStreaming) return;
-
-    let c = activeChat();
-    if (!c) c = createChat();
-
-    let docItems = pendingAttachments.filter((a) => a.kind === "document");
-    let imageItems = pendingAttachments.filter((a) => a.kind === "image");
+  const sendChat = async (c, content, attachments, userShown = false) => {
+    let docItems = attachments.filter((a) => a.kind === "document");
+    let imageItems = attachments.filter((a) => a.kind === "image");
     // Over the per-request image limit: send images through ingest to be transcribed.
     if (imageItems.length > MAX_DIRECT_IMAGES) {
       docItems = docItems.concat(imageItems);
@@ -646,15 +679,11 @@
     save();
     renderSidebar();
 
-    els.welcome.classList.add("hidden");
-    appendMessageDom(
-      "user",
-      userText,
-      displayImages,
-      fileNames,
-      meta.warnings
-    );
-    clearPendingAttachments();
+    if (!userShown) {
+      els.welcome.classList.add("hidden");
+      appendMessageDom("user", userText, displayImages, fileNames, meta.warnings);
+      clearPendingAttachments();
+    }
     scrollToBottom(true);
 
     const assistantWrap = appendMessageDom("assistant", "");
@@ -743,6 +772,368 @@
       scrollToBottom(true);
     }
   };
+
+  // ---------- File creation ----------
+  const CREATE_VERB =
+    /(create|make|generate|produce|build|write|draft|prepare|design|export|turn .* into|convert|stw[oó]rz|zr[oó]b|wygeneruj|przygotuj|napisz|opracuj|zaprojektuj|wyeksportuj|zamie[nń])/i;
+  const FILE_NOUN =
+    /(pdf|docx|word|document|report|whitepaper|brief|ebook|e-book|presentation|deck|slides?|pptx|powerpoint|image|picture|illustration|logo|poster|banner|file|raport|dokument|prezentacj|slajd|obraz|ilustracj|grafik|plik|zdj[eę]ci)/i;
+  const EDIT_VERB =
+    /\b(edit|update|revise|rewrite|fix|correct|change|modify|translate|proofread|shorten|extend|add|remove|edytuj|popraw|zmie[nń]|zaktualizuj|przet[lł]umacz|skr[oó][cć]|rozszerz|dodaj|usu[nń])\b/i;
+  const REFERS_BACK = /\b(this|above|previous|same|ten|tego|powy[zż]sz\w*|poprzedni\w*)\b/i;
+  const EDITABLE_EXT = new Set([".docx", ".pptx", ".xlsx", ".txt", ".md", ".markdown", ".csv", ".json"]);
+
+  const looksLikeFileRequest = (text, hasFiles, hasArtifact) =>
+    (CREATE_VERB.test(text) && FILE_NOUN.test(text)) ||
+    ((hasFiles || hasArtifact) && EDIT_VERB.test(text));
+
+  const latestArtifact = (c) => {
+    for (let i = c.messages.length - 1; i >= 0; i--) {
+      const list = c.messages[i].meta?.artifacts;
+      if (list?.length) return list[list.length - 1];
+    }
+    return null;
+  };
+
+  const historyText = (c) => {
+    const out = [];
+    let used = 0;
+    for (let i = c.messages.length - 1; i >= 0 && out.length < 6; i--) {
+      const m = c.messages[i];
+      const t = (m.role === "user" ? displayUserText(m) : getTextFromContent(m.content)).slice(0, 1500);
+      if (used + t.length > 6000) break;
+      used += t.length;
+      out.unshift(`${m.role === "user" ? "User" : "Assistant"}: ${t}`);
+    }
+    return out.join("\n\n");
+  };
+
+  const formatSize = (n) =>
+    n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+
+  const b64ToBlob = (b64, mime) => {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  };
+
+  const downloadBlob = (blob, name) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  };
+
+  const KIND_LABEL = { pdf: "PDF", docx: "DOCX", pptx: "PPTX", xlsx: "XLSX", image: "IMG", deck: "PPTX" };
+
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+
+  const renderFileCard = (a) => {
+    const card = el("div", "artifact");
+    const head = el("div", "artifact-head");
+    head.appendChild(el("span", `artifact-badge kind-${a.kind}`, KIND_LABEL[a.kind] || (a.kind || "FILE").toUpperCase()));
+    const info = el("div", "artifact-info");
+    info.appendChild(el("div", "artifact-name", a.name));
+    info.appendChild(el("div", "artifact-meta", formatSize(a.size || 0)));
+    head.appendChild(info);
+    const actions = el("div", "artifact-actions");
+    const withBlob = async (fn) => {
+      const rec = await fileStore.get(a.id);
+      if (!rec?.blob) {
+        alert("This file is no longer stored in this browser. Ask again to regenerate it.");
+        return;
+      }
+      fn(rec.blob);
+    };
+    if (a.mime === "application/pdf" || a.kind === "image") {
+      const open = el("button", "artifact-btn ghost", "Open");
+      open.type = "button";
+      open.addEventListener("click", () =>
+        withBlob((blob) => window.open(URL.createObjectURL(blob), "_blank", "noopener"))
+      );
+      actions.appendChild(open);
+    }
+    const dl = el("button", "artifact-btn", "Download");
+    dl.type = "button";
+    dl.addEventListener("click", () => withBlob((blob) => downloadBlob(blob, a.name)));
+    actions.appendChild(dl);
+    head.appendChild(actions);
+    card.appendChild(head);
+    if (a.kind === "image") {
+      const img = el("img", "artifact-image");
+      img.alt = a.name;
+      fileStore.get(a.id).then((rec) => {
+        if (rec?.blob) {
+          img.src = URL.createObjectURL(rec.blob);
+          img.addEventListener("click", () => openLightbox(img.src));
+        } else img.remove();
+      });
+      card.appendChild(img);
+    }
+    return card;
+  };
+
+  const renderDeckCard = (a) => {
+    const card = el("div", "artifact deck");
+    const head = el("div", "artifact-head");
+    head.appendChild(el("span", "artifact-badge kind-deck", "PPTX"));
+    const info = el("div", "artifact-info");
+    info.appendChild(el("div", "artifact-name", a.title || "Presentation"));
+    const metaLine = el("div", "artifact-meta", "Queued on the deck engine…");
+    info.appendChild(metaLine);
+    head.appendChild(info);
+    const actions = el("div", "artifact-actions");
+    head.appendChild(actions);
+    card.appendChild(head);
+    const bar = el("div", "artifact-progress");
+    const fill = el("div", "fill");
+    bar.appendChild(fill);
+    card.appendChild(bar);
+    const grid = el("div", "deck-previews");
+    card.appendChild(grid);
+
+    const poll = async () => {
+      if (!document.body.contains(card) && card.dataset.mounted) return;
+      card.dataset.mounted = "1";
+      let st;
+      try {
+        const res = await fetch(apiUrl(`/api/deck/${encodeURIComponent(a.job_id)}`));
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+        st = await res.json();
+      } catch (e) {
+        metaLine.textContent = `Deck status unavailable: ${e.message}`;
+        bar.remove();
+        return;
+      }
+      if (st.status === "done") {
+        bar.remove();
+        metaLine.textContent = `${st.previews?.length || a.slide_count || ""} slides · Admind template`;
+        actions.innerHTML = "";
+        const dl = el("a", "artifact-btn", "Download");
+        dl.href = st.download_url;
+        dl.rel = "noopener";
+        actions.appendChild(dl);
+        grid.innerHTML = "";
+        (st.previews || []).forEach((src, i) => {
+          const img = el("img");
+          img.src = src;
+          img.alt = `Slide ${i + 1}`;
+          img.loading = "lazy";
+          img.addEventListener("click", () => openLightbox(src));
+          grid.appendChild(img);
+        });
+        (st.warnings || []).slice(0, 3).forEach((w) => card.appendChild(el("p", "artifact-warning", w)));
+        return;
+      }
+      if (st.status === "error") {
+        bar.remove();
+        metaLine.textContent = st.message || "The deck engine failed";
+        return;
+      }
+      metaLine.textContent = st.message || "Working…";
+      fill.style.width = `${Math.max(4, st.progress || 0)}%`;
+      setTimeout(poll, 4000);
+    };
+    setTimeout(poll, 50);
+    return card;
+  };
+
+  const renderArtifacts = (container, artifacts) => {
+    const list = el("div", "artifacts");
+    artifacts.forEach((a) => list.appendChild(a.kind === "deck" ? renderDeckCard(a) : renderFileCard(a)));
+    container.appendChild(list);
+  };
+
+  const ACTION_LABEL = {
+    pdf_report: "PDF report",
+    docx_document: "Word document",
+    presentation: "presentation",
+    edit_file: "edit",
+    image: "image",
+  };
+
+  // Returns false when the server decides the message is ordinary chat.
+  const runCreate = async (c, content, attachments, mode) => {
+    const fileNames = attachments.map((a) => a.name).filter(Boolean);
+    const images = attachments.filter((a) => a.kind === "image").map((a) => a.dataUrl);
+    els.welcome.classList.add("hidden");
+    appendMessageDom("user", content, images, fileNames, []);
+    clearPendingAttachments();
+
+    const assistantWrap = appendMessageDom("assistant", "");
+    const contentEl = assistantWrap.querySelector(".content");
+    const status = el("div", "create-status");
+    const statusText = el("div", "create-status-text", "Starting…");
+    const bar = el("div", "artifact-progress");
+    const fill = el("div", "fill");
+    bar.appendChild(fill);
+    status.appendChild(statusText);
+    status.appendChild(bar);
+    contentEl.appendChild(status);
+    scrollToBottom(true);
+
+    const fd = new FormData();
+    fd.append("prompt", content);
+    fd.append("action", mode);
+    fd.append("history", historyText(c));
+    attachments.forEach((a) => fd.append("files", a.file, a.name || a.file.name));
+    const prev = latestArtifact(c);
+    const refersBack = mode === "edit_file" || EDIT_VERB.test(content) || REFERS_BACK.test(content);
+    if (!attachments.length && prev && prev.kind !== "deck" && refersBack) {
+      const rec = await fileStore.get(prev.id);
+      if (rec?.markdown) {
+        fd.append("previous_markdown", rec.markdown);
+        fd.append("previous_kind", prev.kind);
+      } else if (rec?.blob && EDITABLE_EXT.has(extOf(prev.name))) {
+        fd.append("files", new File([rec.blob], prev.name, { type: prev.mime }));
+      }
+    }
+
+    setStreaming(true);
+    abortController = new AbortController();
+    const artifacts = [];
+    const warnings = [];
+    const summaries = [];
+    let errorText = "";
+    let fallback = false;
+
+    const handle = async (ev) => {
+      if (ev.type === "chat") fallback = true;
+      else if (ev.type === "progress") {
+        statusText.textContent = ev.message;
+        fill.style.width = `${ev.pct}%`;
+        scrollToBottom();
+      } else if (ev.type === "warning") warnings.push(ev.message);
+      else if (ev.type === "error") errorText = ev.message;
+      else if (ev.type === "file") {
+        const id = uid();
+        await fileStore.put(id, {
+          blob: b64ToBlob(ev.b64, ev.mime),
+          name: ev.name,
+          mime: ev.mime,
+          markdown: ev.markdown || "",
+        });
+        artifacts.push({ id, kind: ev.kind, name: ev.name, mime: ev.mime, size: ev.size });
+        summaries.push(ev.summary);
+      } else if (ev.type === "deck_job") {
+        artifacts.push({ kind: "deck", job_id: ev.job_id, title: ev.title, slide_count: ev.slide_count });
+        summaries.push(`Building a ${ev.slide_count}-slide Admind presentation: **${ev.title}**. Previews appear below when it is ready.`);
+      }
+    };
+
+    try {
+      const res = await fetch(apiUrl("/api/create"), {
+        method: "POST",
+        body: fd,
+        signal: abortController.signal,
+      });
+      if (!res.ok || !res.body) {
+        let detail = `${res.status} ${res.statusText}`;
+        try {
+          detail = (await res.json()).detail || detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+          const line = buffer.slice(0, idx).split("\n").find((l) => l.startsWith("data:"));
+          buffer = buffer.slice(idx + 2);
+          if (!line) continue;
+          try {
+            await handle(JSON.parse(line.slice(5).trim()));
+          } catch (e) {
+            console.warn("bad create event", e);
+          }
+        }
+      }
+    } catch (e) {
+      errorText = e.name === "AbortError" ? "Stopped." : e.message || String(e);
+    } finally {
+      abortController = null;
+      setStreaming(false);
+    }
+
+    if (fallback) {
+      assistantWrap.remove();
+      await sendChat(c, content, attachments, true);
+      return;
+    }
+
+    status.remove();
+    const label = ACTION_LABEL[mode] || "file";
+    let text = summaries.join("\n\n");
+    if (!text) text = `**Could not create the ${label}.** ${errorText || "No file was returned."}`;
+    else if (errorText) text += `\n\n**Note:** ${errorText}`;
+    contentEl.innerHTML = renderMarkdown(text);
+    if (artifacts.length) renderArtifacts(contentEl, artifacts);
+    warnings.slice(0, 5).forEach((w) => contentEl.appendChild(el("p", "artifact-warning", w)));
+
+    c.messages.push({
+      role: "user",
+      content: fileNames.length ? `${content}\n\n[Attached: ${fileNames.join(", ")}]` : content,
+      userText: content,
+      meta: { files: fileNames, warnings: [] },
+    });
+    c.messages.push({ role: "assistant", content: text, meta: { artifacts, warnings } });
+    if (!c.title || c.title === "New chat") c.title = titleFromMessage(content);
+    c.updatedAt = Date.now();
+    save();
+    renderSidebar();
+    scrollToBottom(true);
+  };
+
+  const sendMessage = async (text) => {
+    const content = (text || "").trim();
+    if ((!content && pendingAttachments.length === 0) || isStreaming) return;
+    let c = activeChat();
+    if (!c) c = createChat();
+    const attachments = pendingAttachments.slice();
+    const wantsCreate =
+      content &&
+      outputMode !== "chat" &&
+      (outputMode !== "auto" || looksLikeFileRequest(content, attachments.length > 0, !!latestArtifact(c)));
+    if (wantsCreate) return runCreate(c, content, attachments, outputMode);
+    return sendChat(c, content, attachments);
+  };
+
+  const setOutputMode = (mode) => {
+    outputMode = mode;
+    els.outputBar?.querySelectorAll(".output-chip").forEach((b) =>
+      b.classList.toggle("active", b.dataset.mode === mode)
+    );
+    const placeholders = {
+      pdf_report: "Describe the PDF report (topic, length, charts, images)…",
+      docx_document: "Describe the Word document…",
+      presentation: "Describe the presentation (topic, audience, number of slides)…",
+      edit_file: "Attach a file (or use the last generated one) and say what to change…",
+      image: "Describe the image…",
+    };
+    els.input.placeholder = placeholders[mode] || "Message… (attach files or paste images)";
+  };
+
+  els.outputBar?.addEventListener("click", (e) => {
+    const chip = e.target.closest(".output-chip");
+    if (chip && !isStreaming) setOutputMode(chip.dataset.mode);
+  });
 
   const stopGeneration = () => {
     if (abortController) abortController.abort();
@@ -933,6 +1324,20 @@
     }
   };
 
+  const refreshCreateCapabilities = async () => {
+    try {
+      const res = await fetch(apiUrl("/api/create/capabilities"));
+      if (!res.ok) return;
+      const caps = await res.json();
+      const hide = { presentation: !caps.presentation, image: !caps.images };
+      els.outputBar?.querySelectorAll(".output-chip").forEach((b) => {
+        b.classList.toggle("hidden", !!hide[b.dataset.mode]);
+      });
+    } catch {
+      /* keep all modes visible */
+    }
+  };
+
   const refreshHealth = async () => {
     try {
       const res = await fetch(apiUrl("/api/health"));
@@ -963,6 +1368,7 @@
     renderMessages();
     autoResize();
     refreshIngestFormats();
+    refreshCreateCapabilities();
     refreshHealth();
     setInterval(refreshHealth, 20000);
   };

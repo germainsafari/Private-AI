@@ -162,6 +162,9 @@ python benchmarks/plot_results.py benchmarks/results/text_sweep.csv
 | `POST` | `/api/chat` | Chat completions (SSE streaming by default) |
 | `POST` | `/api/ingest` | Parse PDF/Office/text uploads → `combined_text` + vision images |
 | `GET` | `/api/ingest/formats` | Allowed extensions and ingest limits |
+| `POST` | `/api/create` | Create or edit a file (PDF, DOCX, deck, image); SSE progress + file |
+| `GET` | `/api/deck/{id}` | Deck job status, signed download + preview links |
+| `GET` | `/api/create/capabilities` | Which outputs this deployment can produce |
 | `GET` | `/api/health` | Liveness + model endpoint |
 | `GET` | `/api/models` | Upstream model list |
 | `GET` | `/api/metrics` | Snapshot: GPU, queue, latency percentiles, tok/s |
@@ -230,6 +233,25 @@ cd app
 python -m pytest tests/test_ingest.py -q
 ```
 
+## Creating and editing files (chat UI)
+
+The model can now hand back files you download straight from the chat:
+
+| Output | How | Brand |
+| --- | --- | --- |
+| **PDF report** | outline → sections written in parallel → ReportLab | Admind cover, contents, coral `_` titles, teal tables, brand-colour charts; up to ~40 pages |
+| **Word document** | same pipeline → python-docx | Acumin Pro styles, live TOC, editable tables and charts |
+| **Presentation** | Admind deck engine (Ppttx maker) | Full brand template, slide previews in chat |
+| **Edit a file** | attach DOCX / PPTX / XLSX / TXT / MD / CSV / JSON and say what to change | Find-and-replace keeps fonts, bold and layout; PDFs are regenerated as a branded report |
+| **Image** | optional OpenAI-compatible image API | Only when you ask; also inside reports ("with illustrations") |
+
+Pick **Auto** (detects "create a 10-page PDF…", "przygotuj prezentację…") or force an output with the chips above the composer. Follow-ups like *"add a section on risks"* revise the last file. Generated files live in the browser (IndexedDB), not on the server. Details: [`docs/FILE_GENERATION.md`](docs/FILE_GENERATION.md).
+
+```powershell
+cd app
+python -m pytest tests -q
+```
+
 ## Findings report (PDF)
 
 A shareable write-up with architecture summary, tables, and all benchmark charts:
@@ -284,6 +306,9 @@ Ensure `main` includes root [`vercel.json`](vercel.json) (single FastAPI service
 | `MAX_UPLOAD_MB` | `10` on Hobby if large uploads fail |
 | `LLM_DISABLE_THINKING` | `1` |
 | `VLLM_MAX_IMAGES_PER_PROMPT` | `4` (match vLLM `--limit-mm-per-prompt`) |
+| `DECK_ENGINE_URL` | `https://slides-api.admindagency.com` (enables **Slides**) |
+| `DECK_ENGINE_TOKEN_SECRET` | same value as `ENGINE_TOKEN_SECRET` in Ppttx maker `infra/.env` |
+| `IMAGE_BASE_URL` / `IMAGE_API_KEY` / `IMAGE_MODEL` | optional image generator (enables **Image**) |
 
 5. **Deploy**, then verify:
 
