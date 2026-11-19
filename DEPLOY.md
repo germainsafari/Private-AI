@@ -81,11 +81,19 @@ Details: [`docs/DOCUMENT_INGEST.md`](docs/DOCUMENT_INGEST.md).
 
 ### Verify after deploy
 
+Current production hostname (after the env fix + redeploy): **`https://private-ai-mu-woad.vercel.app`**. Prefer this over older `*.vercel.app` aliases that may still serve a deployment with stale env.
+
 ```powershell
-curl.exe https://<your-app>.vercel.app/api/health
-curl.exe https://<your-app>.vercel.app/api/ingest/formats
-curl.exe -F "files=@README.md" https://<your-app>.vercel.app/api/ingest
+$APP = "https://private-ai-mu-woad.vercel.app"
+curl.exe "$APP/api/health"
+curl.exe "$APP/api/create/capabilities"
+curl.exe "$APP/api/ingest/formats"
+curl.exe -F "files=@README.md" "$APP/api/ingest"
 ```
+
+Expect `backend_reachable: true`, model `qwen3.6-35b-a3b`, `documents: true`, and with deck vars set `presentation: true`. Then in the UI: create a short PDF, attach a DOCX and ask for an edit, or ask for slides.
+
+Deep dive on create/edit: [`docs/FILE_GENERATION.md`](docs/FILE_GENERATION.md).
 
 ### New Vercel account / import from GitHub
 

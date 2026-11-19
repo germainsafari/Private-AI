@@ -6,29 +6,34 @@ Local inference stack: **Qwen2.5-VL** on **vLLM** (NVIDIA RTX 5090), with a Fast
 
 ```text
 Browser (chat UI + /dashboard)
+  - chat, document attach, file create/edit, IndexedDB downloads
         |
         v
-FastAPI gateway
-  - AsyncOpenAI proxy
-  - asyncio admission control (queue depth, concurrency ceiling, HTTP 429)
-  - TTFT / wait / processing latency tracking
-  - SLA-aware multi-model router
+FastAPI gateway (local or Vercel)
+  - AsyncOpenAI proxy + admission control + SLA router
+  - /api/ingest  → parse PDF/Office/text (+ vision figures)
+  - /api/create  → branded PDF/DOCX, edits, optional images (SSE)
+  - /api/deck/*  → broker Admind slide jobs + signed download links
         |
-        +-----> primary backend (vLLM: Qwen2.5-VL-7B)
-        |
-        +-----> optional fast backend (fallback under SLA breach)
+        +-----> vLLM (qwen3.6-35b-a3b) via private-llm tunnel / localhost
+        +-----> optional fast backend (SLA spillover)
+        +-----> slides-api (Ppttx maker deck engine)
+        +-----> optional IMAGE_BASE_URL
         |
         v
-NVIDIA RTX 5090 (WSL2 / CUDA)
+NVIDIA RTX 5090 (WSL2 / CUDA) + deck-engine Docker
 ```
 
 ```mermaid
 flowchart TD
-    Browser["Browser: Chat + Dashboard"]
+    Browser["Browser: Chat + create/edit UI"]
     Gateway["FastAPI Gateway"]
     Orchestrator["Orchestrator: admission + backpressure"]
     Metrics["Metrics: GPU, TTFT, percentiles, tok/s"]
     Router["Model Router: SLA fallback"]
+    Create["creator.py: outline + sections + edits"]
+    Render["render_pdf / render_docx / charts"]
+    Deck["deck_client → slides-api"]
     Vllm["vLLM OpenAI API"]
     GPU["RTX 5090"]
 
@@ -37,6 +42,10 @@ flowchart TD
     Orchestrator --> Router
     Router --> Vllm
     Vllm --> GPU
+    Gateway --> Create
+    Create --> Vllm
+    Create --> Render
+    Create --> Deck
     Orchestrator --> Metrics
     Metrics -->|"/api/metrics SSE"| Browser
 ```
@@ -50,6 +59,7 @@ flowchart TD
 | Streaming + TTFT | First-token latency in SSE `done` payload | — |
 | Multi-model SLA routing | Fallback when p95 TTFT breaches SLA | [`router/RESULTS.md`](router/RESULTS.md) |
 | Document ingest | PDF/DOCX/PPTX/XLSX/TXT parsed as text; scans + embedded images via vision | [`docs/DOCUMENT_INGEST.md`](docs/DOCUMENT_INGEST.md) |
+| File creation + edit | Branded PDF/DOCX reports, Admind decks, OOXML edits, optional images; download in chat | [`docs/FILE_GENERATION.md`](docs/FILE_GENERATION.md) |
 | Quantization benchmarks | FP16 vs bitsandbytes INT8 vs AWQ INT4 | [`quantization/RESULTS.md`](quantization/RESULTS.md) |
 | Prefill / decode timing | Measured cost split; disagg notes for single-GPU limits | [`disaggregation/RESULTS.md`](disaggregation/RESULTS.md) |
 
@@ -70,14 +80,25 @@ Throughput rises with concurrency up to the admission ceiling, then flattens whi
 ```text
 .
 ├── app/
-│   ├── main.py              # FastAPI gateway (async, streaming, metrics)
+│   ├── main.py              # FastAPI gateway (chat, ingest, create, metrics)
 │   ├── ingest.py            # Document parsing + vision fallbacks
+│   ├── creator.py           # Intent + PDF/DOCX/deck/edit/image pipelines
+│   ├── docspec.py           # Structured contracts for the model
+│   ├── llm_structured.py    # JSON-schema calls to vLLM
+│   ├── render_pdf.py / render_docx.py / charts.py / brand.py
+│   ├── file_edit.py / deck_client.py / images.py
+│   ├── assets/              # Brand illustrations + Source Sans 3 (OFL)
 │   ├── orchestrator.py      # Admission control + request tickets
 │   ├── metrics.py           # NVML GPU + rolling latency/throughput
 │   ├── router.py            # SLA-aware multi-backend routing
 │   ├── static/              # Chat UI + /dashboard
+│   ├── tests/               # Ingest + create/edit render tests
 │   ├── Dockerfile
 │   └── requirements.txt
+├── docs/
+│   ├── DOCUMENT_INGEST.md
+│   ├── FILE_GENERATION.md   # Create/edit architecture + design story
+│   └── …
 ├── benchmarks/
 │   ├── bench_client.py      # Async load generator → CSV
 │   ├── plot_results.py
@@ -310,14 +331,15 @@ Ensure `main` includes root [`vercel.json`](vercel.json) (single FastAPI service
 | `DECK_ENGINE_TOKEN_SECRET` | same value as `ENGINE_TOKEN_SECRET` in Ppttx maker `infra/.env` |
 | `IMAGE_BASE_URL` / `IMAGE_API_KEY` / `IMAGE_MODEL` | optional image generator (enables **Image**) |
 
-5. **Deploy**, then verify:
+5. **Deploy**, then verify (current production example: `https://private-ai-mu-woad.vercel.app`):
 
 ```powershell
 curl.exe https://YOUR-PROJECT.vercel.app/api/health
+curl.exe https://YOUR-PROJECT.vercel.app/api/create/capabilities
 curl.exe https://YOUR-PROJECT.vercel.app/api/ingest/formats
 ```
 
-Expect `"backend_reachable": true`, `"documents": true`.
+Expect `"backend_reachable": true`, `"documents": true`, and with deck env set `"file_creation.presentation": true`.
 
 6. Optional **custom domain** → Project → Settings → Domains.
 
